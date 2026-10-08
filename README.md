@@ -26,6 +26,12 @@ Aplicatie cu interfata grafica (WPF) pentru Windows 11 care dezactiveaza functii
 - **AMD Radeon Adrenalin**: setarile recomandate, apare doar daca ai placa AMD
 - **Comparatie inainte / dupa**: dupa restart vezi timpul de pornire, RAM, procese, programe la pornire
 
+### Benchmark si bottleneck
+
+- **Test FPS in joc**: pornesti testul, intri in joc, iar aplicatia masoara 30 / 60 / 120 s cu [PresentMon](https://github.com/GameTechDev/PresentMon) (Intel, open-source, fara injectare in joc). Rezultat: FPS mediu, 1% low, 0.1% low, comparatie cu testul anterior pe acelasi joc. PresentMon se descarca la prima folosire si i se verifica SHA256
+- **Test la capacitate maxima**: procesor pe un nucleu si pe toate nucleele la 100%, viteza RAM, disc de sistem (scriere / citire reale, fara cache), placa video (scena 3D DirectX cu efecte de shader pe tot ecranul). Scoruri, temperaturi maxime si comparatie cu testul anterior
+- **BOTTLENECK**: bare pentru procesor, cel mai incarcat nucleu, placa video, VRAM si RAM din ultimul test, plus verdictul (limita pe GPU, pe procesor, FPS plafonat, VRAM / RAM plin, temperaturi)
+
 ### Dashboard hardware
 
 CPU, GPU (AMD / NVIDIA / Intel: VRAM, driver si Adrenalin, chip, BIOS, PCIe, load, temperatura, frecvente, consum, ventilator), RAM, discuri, analiza de bottleneck si sfaturi rapide (XMP, Hz monitor, Resizable BAR, driver vechi, TRIM). Apasa pe un chip ca sa vezi detaliile.

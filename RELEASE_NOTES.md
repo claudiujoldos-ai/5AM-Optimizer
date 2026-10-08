@@ -1,4 +1,5 @@
-5AM Optimizer v1.1.2
-- Serviciul DiagTrack (telemetrie) nu mai este bifat implicit la SERVICII; il poti bifa manual
-- Corectat: memoria placii video (VRAM) aparea 4 GB la placile cu mai mult (ex. RTX 2060 SUPER 8 GB)
-- Corectat: chip-ul, BIOS-ul si versiunea Adrenalin ale placii video nu se afisau
+5AM Optimizer v1.2.0
+- BENCHMARK nou: Test FPS in joc (FPS mediu, 1% low, 0.1% low) masurat cu PresentMon de la Intel
+- Test la capacitate maxima: procesor (1 nucleu si toate), RAM, disc fara cache, placa video DirectX, temperaturi maxime
+- Casuta BOTTLENECK: ce componenta iti limiteaza FPS-ul, cu bare si recomandari
+- Istoric: fiecare test se compara cu cel anterior

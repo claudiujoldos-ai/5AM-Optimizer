@@ -3,7 +3,7 @@
 param([switch]$SelfTest)
 
 # Versiunea se suprascrie automat din tag-ul GitHub la build (v1.2.3 -> 1.2.3). Nu o muta de pe linia asta.
-$AppVersion = '1.1.2'
+$AppVersion = '1.2.0'
 # Repo-ul GitHub de unde se descarca actualizarile (owner/repo)
 $UpdateRepo = 'claudiujoldos-ai/5AM-Optimizer'
 
@@ -1163,6 +1163,593 @@ if ($gpuVendors -contains 'AMD') {
     New-FolderTile $amdG (Emo 0x1F534) 'AMD RADEON ADRENALIN'
 }
 
+# ---------- Benchmark (FPS in joc + test de stres) si Bottleneck ----------
+# FPS in joc: PresentMon (Intel, open-source), descarcat la prima folosire si verificat SHA256.
+$pmVer = '2.6.0'
+$pmSha = 'b2a706bc6ad475749e3b7e3409263aa1e6906d45bdcf993f6dbc0f660188f1af'
+$pmUrl = "https://github.com/GameTechDev/PresentMon/releases/download/v$pmVer/PresentMon-$pmVer-x64.exe"
+$pmExe = "$bkDir\tools\PresentMon-$pmVer-x64.exe"
+$benchFile = "$bkDir\bench.json"
+$script:bm = [hashtable]::Synchronized(@{ Busy = $false })
+$script:bmSamples = [Collections.ArrayList]::Synchronized((New-Object Collections.ArrayList))
+
+# Cod C# compilat la prima folosire: CPU, RAM, disc fara cache, scena GPU (WPF / DirectX)
+$script:benchCs = @'
+using System;
+using System.Diagnostics;
+using System.Threading;
+using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Effects;
+using System.Windows.Media.Media3D;
+using System.Windows.Shapes;
+
+public static class FiveAmBench {
+    public static double Sink;
+    static long Chunk(long seed) {
+        long a = seed | 1; double x = 1.0001;
+        for (int i = 0; i < 2000000; i++) {
+            a = a * 6364136223846793005L + 1442695040888963407L;
+            x = x * 1.0000001 + (a & 7) * 1e-9;
+            if ((a & 0xFFF) == 0) x = Math.Sqrt(x + 1.0);
+        }
+        Sink += x;
+        return a;
+    }
+    // milioane de operatii pe secunda, pe toate firele
+    public static double Cpu(int threads, int ms) {
+        long[] counts = new long[threads];
+        Thread[] ts = new Thread[threads];
+        Stopwatch sw = Stopwatch.StartNew();
+        for (int t = 0; t < threads; t++) {
+            int id = t;
+            ts[t] = new Thread(delegate () {
+                long s = id * 7919 + 1;
+                while (sw.ElapsedMilliseconds < ms) { s = Chunk(s); counts[id]++; }
+            });
+            ts[t].IsBackground = true;
+            ts[t].Start();
+        }
+        foreach (Thread th in ts) th.Join();
+        double sec = sw.Elapsed.TotalSeconds;
+        long total = 0; foreach (long c in counts) total += c;
+        return total * 2.0 / sec;
+    }
+    // GB/s copiati in RAM
+    public static double Ram(int threads, int mbPerThread, int ms) {
+        byte[][] src = new byte[threads][]; byte[][] dst = new byte[threads][];
+        for (int t = 0; t < threads; t++) {
+            src[t] = new byte[mbPerThread * 1048576]; dst[t] = new byte[mbPerThread * 1048576];
+            for (int i = 0; i < src[t].Length; i += 4096) { src[t][i] = (byte)i; dst[t][i] = 1; }
+        }
+        long[] bytes = new long[threads];
+        Thread[] ts = new Thread[threads];
+        Stopwatch sw = Stopwatch.StartNew();
+        for (int t = 0; t < threads; t++) {
+            int id = t;
+            ts[t] = new Thread(delegate () {
+                while (sw.ElapsedMilliseconds < ms) { Buffer.BlockCopy(src[id], 0, dst[id], 0, src[id].Length); bytes[id] += src[id].Length; }
+            });
+            ts[t].IsBackground = true;
+            ts[t].Start();
+        }
+        foreach (Thread th in ts) th.Join();
+        double sec = sw.Elapsed.TotalSeconds;
+        long total = 0; foreach (long b in bytes) total += b;
+        return total / 1e9 / sec;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr sec, uint disp, uint flags, IntPtr tmpl);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool WriteFile(IntPtr h, IntPtr buf, uint n, out uint done, IntPtr ov);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool ReadFile(IntPtr h, IntPtr buf, uint n, out uint done, IntPtr ov);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool CloseHandle(IntPtr h);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern IntPtr VirtualAlloc(IntPtr addr, UIntPtr size, uint type, uint prot);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool VirtualFree(IntPtr addr, UIntPtr size, uint type);
+
+    // [scriere MB/s, citire MB/s], direct pe disc (fara cache Windows)
+    public static double[] Disk(string path, int mb) {
+        const uint GENERIC_WRITE = 0x40000000, GENERIC_READ = 0x80000000;
+        const uint CREATE_ALWAYS = 2, OPEN_EXISTING = 3;
+        const uint NO_BUFFERING = 0x20000000, WRITE_THROUGH = 0x80000000, SEQUENTIAL = 0x08000000;
+        int chunk = 4 * 1048576; int n = Math.Max(1, mb / 4);
+        IntPtr bad = new IntPtr(-1);
+        IntPtr buf = VirtualAlloc(IntPtr.Zero, (UIntPtr)(uint)chunk, 0x3000, 0x04);
+        if (buf == IntPtr.Zero) throw new Exception("memorie indisponibila pentru testul de disc");
+        try {
+            byte[] rnd = new byte[chunk]; new Random(5).NextBytes(rnd); Marshal.Copy(rnd, 0, buf, chunk);
+            uint done;
+            IntPtr h = CreateFileW(path, GENERIC_WRITE, 0, IntPtr.Zero, CREATE_ALWAYS, NO_BUFFERING | WRITE_THROUGH, IntPtr.Zero);
+            if (h == bad) throw new Exception("nu pot crea fisierul de test (" + Marshal.GetLastWin32Error() + ")");
+            Stopwatch sw = Stopwatch.StartNew();
+            try {
+                for (int i = 0; i < n; i++)
+                    if (!WriteFile(h, buf, (uint)chunk, out done, IntPtr.Zero)) throw new Exception("scriere esuata (" + Marshal.GetLastWin32Error() + ")");
+            } finally { CloseHandle(h); }
+            double w = n * 4.0 / sw.Elapsed.TotalSeconds;
+            h = CreateFileW(path, GENERIC_READ, 0, IntPtr.Zero, OPEN_EXISTING, NO_BUFFERING | SEQUENTIAL, IntPtr.Zero);
+            if (h == bad) throw new Exception("nu pot citi fisierul de test (" + Marshal.GetLastWin32Error() + ")");
+            sw.Restart();
+            try {
+                for (int i = 0; i < n; i++)
+                    if (!ReadFile(h, buf, (uint)chunk, out done, IntPtr.Zero)) throw new Exception("citire esuata (" + Marshal.GetLastWin32Error() + ")");
+            } finally { CloseHandle(h); }
+            double r = n * 4.0 / sw.Elapsed.TotalSeconds;
+            return new double[] { w, r };
+        } finally {
+            VirtualFree(buf, UIntPtr.Zero, 0x8000);
+            try { System.IO.File.Delete(path); } catch { }
+        }
+    }
+}
+
+public class FiveAmGpu {
+    public long Frames;
+    readonly Stopwatch sw = new Stopwatch();
+    AxisAngleRotation3D rotA, rotB;
+    TranslateTransform[] moves;
+    EventHandler handler;
+
+    static MeshGeometry3D Sphere(int slices, int stacks) {
+        MeshGeometry3D m = new MeshGeometry3D();
+        for (int st = 0; st <= stacks; st++) {
+            double phi = Math.PI * st / stacks;
+            for (int sl = 0; sl <= slices; sl++) {
+                double th = 2 * Math.PI * sl / slices;
+                Vector3D n = new Vector3D(Math.Sin(phi) * Math.Cos(th), Math.Cos(phi), Math.Sin(phi) * Math.Sin(th));
+                m.Positions.Add(new Point3D(n.X, n.Y, n.Z)); m.Normals.Add(n);
+            }
+        }
+        for (int st = 0; st < stacks; st++)
+            for (int sl = 0; sl < slices; sl++) {
+                int a = st * (slices + 1) + sl, b = a + slices + 1;
+                m.TriangleIndices.Add(a); m.TriangleIndices.Add(b); m.TriangleIndices.Add(a + 1);
+                m.TriangleIndices.Add(a + 1); m.TriangleIndices.Add(b); m.TriangleIndices.Add(b + 1);
+            }
+        m.Freeze();
+        return m;
+    }
+
+    public static FiveAmGpu Build(Grid host, int count) {
+        FiveAmGpu g = new FiveAmGpu();
+        Viewport3D vp = new Viewport3D();
+        vp.Camera = new PerspectiveCamera(new Point3D(0, 0, 42), new Vector3D(0, 0, -1), new Vector3D(0, 1, 0), 60);
+        Model3DGroup scene = new Model3DGroup();
+        scene.Children.Add(new AmbientLight(Color.FromRgb(40, 12, 20)));
+        scene.Children.Add(new DirectionalLight(Colors.White, new Vector3D(-1, -1, -2)));
+        scene.Children.Add(new PointLight(Color.FromRgb(255, 46, 77), new Point3D(12, 10, 12)));
+        scene.Children.Add(new PointLight(Color.FromRgb(255, 183, 197), new Point3D(-14, -8, 10)));
+        MeshGeometry3D mesh = Sphere(48, 24);
+        Color[] cols = { Color.FromRgb(255, 46, 77), Color.FromRgb(255, 122, 147), Color.FromRgb(255, 183, 197), Color.FromRgb(176, 16, 42), Color.FromRgb(255, 228, 234) };
+        Random r = new Random(5);
+        Model3DGroup balls = new Model3DGroup();
+        for (int i = 0; i < count; i++) {
+            MaterialGroup mg = new MaterialGroup();
+            mg.Children.Add(new DiffuseMaterial(new SolidColorBrush(cols[i % cols.Length])));
+            mg.Children.Add(new SpecularMaterial(Brushes.White, 60));
+            mg.Freeze();
+            GeometryModel3D gm = new GeometryModel3D(mesh, mg);
+            double rad = 4 + r.NextDouble() * 18, a1 = r.NextDouble() * Math.PI * 2, a2 = r.NextDouble() * Math.PI, sc = 0.5 + r.NextDouble() * 0.9;
+            Transform3DGroup tg = new Transform3DGroup();
+            tg.Children.Add(new ScaleTransform3D(sc, sc, sc));
+            tg.Children.Add(new TranslateTransform3D(rad * Math.Sin(a2) * Math.Cos(a1), rad * Math.Cos(a2), rad * Math.Sin(a2) * Math.Sin(a1)));
+            tg.Freeze();
+            gm.Transform = tg;
+            balls.Children.Add(gm);
+        }
+        g.rotA = new AxisAngleRotation3D(new Vector3D(0, 1, 0), 0);
+        g.rotB = new AxisAngleRotation3D(new Vector3D(1, 0, 0), 0);
+        Transform3DGroup rt = new Transform3DGroup();
+        rt.Children.Add(new RotateTransform3D(g.rotA)); rt.Children.Add(new RotateTransform3D(g.rotB));
+        balls.Transform = rt;
+        scene.Children.Add(balls);
+        ModelVisual3D mv = new ModelVisual3D(); mv.Content = scene; vp.Children.Add(mv);
+        host.Children.Add(vp);
+        // straturi cu blur (pixel shader pe placa video), mutate la fiecare cadru
+        Canvas cv = new Canvas(); cv.IsHitTestVisible = false;
+        g.moves = new TranslateTransform[6];
+        for (int i = 0; i < 6; i++) {
+            Ellipse e = new Ellipse(); e.Width = 900; e.Height = 900;
+            e.Fill = new RadialGradientBrush(Color.FromArgb(120, cols[i % cols.Length].R, cols[i % cols.Length].G, cols[i % cols.Length].B), Color.FromArgb(0, 0, 0, 0));
+            BlurEffect be = new BlurEffect(); be.Radius = 80; be.RenderingBias = RenderingBias.Quality; e.Effect = be;
+            g.moves[i] = new TranslateTransform(); e.RenderTransform = g.moves[i];
+            cv.Children.Add(e);
+        }
+        host.Children.Add(cv);
+        g.handler = new EventHandler(g.OnRender);
+        return g;
+    }
+    public void Start() { sw.Start(); CompositionTarget.Rendering += handler; }
+    public void Stop() { CompositionTarget.Rendering -= handler; sw.Stop(); }
+    public double Seconds { get { return sw.Elapsed.TotalSeconds; } }
+    void OnRender(object s, EventArgs e) {
+        Frames++;
+        double t = sw.Elapsed.TotalSeconds;
+        rotA.Angle = (t * 40) % 360; rotB.Angle = (t * 23) % 360;
+        for (int i = 0; i < moves.Length; i++) {
+            moves[i].X = 400 + Math.Sin(t * 0.9 + i) * 600;
+            moves[i].Y = 150 + Math.Cos(t * 0.7 + i * 1.3) * 350;
+        }
+    }
+}
+'@
+function Initialize-BenchTypes {
+    if ('FiveAmBench' -as [type]) { return }
+    Add-Type -TypeDefinition $script:benchCs -ReferencedAssemblies PresentationCore, PresentationFramework, WindowsBase, System.Xaml -ErrorAction Stop
+}
+
+# Citire senzori pentru teste (ruleaza in fundal, cate o proba pe secunda)
+$script:sampleDef = @'
+function Get-HwSample($vramMB) {
+    $s = @{ Cpu = $null; Core = $null; Gpu = $null; VU = $null; VT = $null; Ram = $null; Ct = $null; Gt = $null }
+    try { $pc = @(Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -ErrorAction Stop)
+          $s.Cpu = [int](($pc | Where-Object { $_.Name -eq '_Total' }).PercentProcessorTime)
+          $s.Core = [int](($pc | Where-Object { $_.Name -ne '_Total' } | Measure-Object PercentProcessorTime -Maximum).Maximum) } catch {}
+    try { $os = Get-CimInstance Win32_OperatingSystem; $s.Ram = [int](100 * (1 - $os.FreePhysicalMemory / $os.TotalVisibleMemorySize)) } catch {}
+    if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+        try { $q = @(& nvidia-smi --query-gpu=utilization.gpu,temperature.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>$null)
+              if ($q.Count) { $p = ([string]$q[0]) -split ',\s*'; $s.Gpu = [int]$p[0]; $s.Gt = [int]$p[1]; $s.VU = [int]$p[2]; $s.VT = [int]$p[3] } } catch {}
+    }
+    if ($null -eq $s.Gpu) {
+        try {
+            $am = @(Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory -ErrorAction Stop)
+            $best = $am | Sort-Object DedicatedUsage -Descending | Select-Object -First 1
+            if ($best) {
+                $luid = $best.Name -replace '_phys_\d+$', ''
+                $by = @{}
+                foreach ($e in @(Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine -ErrorAction Stop |
+                                 Where-Object { $_.Name -like "*$luid*" -and $_.Name -like '*engtype_3D*' })) {
+                    if ($e.Name -match '_eng_(\d+)_') { $by[$Matches[1]] = [double]$by[$Matches[1]] + [double]$e.UtilizationPercentage }
+                }
+                $s.Gpu = 0; if ($by.Count) { $s.Gpu = [int][math]::Min(100, ($by.Values | Measure-Object -Maximum).Maximum) }
+                $s.VU = [int]($best.DedicatedUsage / 1MB); if ($vramMB) { $s.VT = [int]$vramMB }
+            }
+        } catch {}
+    }
+    foreach ($ns in 'root/LibreHardwareMonitor', 'root/OpenHardwareMonitor') {
+        try { $all = @(Get-CimInstance -Namespace $ns -ClassName Sensor -ErrorAction Stop | Where-Object { $_.SensorType -eq 'Temperature' })
+              $c = $all | Where-Object { $_.Name -match 'CPU|Tctl|Package|Tdie' -and $_.Identifier -notmatch 'gpu' } | Select-Object -First 1
+              if ($c) { $s.Ct = [int]$c.Value }
+              if ($null -eq $s.Gt) { $g = $all | Where-Object { $_.Identifier -match 'gpu' -and $_.Name -match 'GPU Core' } | Select-Object -First 1
+                                      if ($g) { $s.Gt = [int]$g.Value } }
+              break } catch {}
+    }
+    $s
+}
+'@
+
+# Statistici din timpii de cadru (ms): FPS mediu, 1% low si 0.1% low (media celor mai lente cadre)
+function Get-FrameStats([double[]]$ft) {
+    $ft = @($ft | Where-Object { $_ -gt 0 -and $_ -lt 5000 })
+    if ($ft.Count -lt 2) { return $null }
+    $sorted = [double[]]($ft | Sort-Object)
+    $sum = ($ft | Measure-Object -Sum).Sum
+    $low = { param($pct) $k = [math]::Max(1, [int][math]::Ceiling($sorted.Count * $pct)); $w = $sorted[($sorted.Count - $k)..($sorted.Count - 1)]
+             1000.0 / (($w | Measure-Object -Average).Average) }
+    @{ Frames = $ft.Count; Sec = $sum / 1000.0; Avg = 1000.0 * $ft.Count / $sum
+       Low1 = (& $low 0.01); Low01 = (& $low 0.001); Max = 1000.0 / $sorted[0]; Min = 1000.0 / $sorted[-1] }
+}
+
+# Analiza bottleneck din probele culese in timpul testului
+function Get-Bottleneck($samples, $fps, $refresh) {
+    $avg = { param($k) $v = @($samples | ForEach-Object { $_[$k] } | Where-Object { $null -ne $_ }); if ($v.Count) { ($v | Measure-Object -Average).Average } else { $null } }
+    $mx  = { param($k) $v = @($samples | ForEach-Object { $_[$k] } | Where-Object { $null -ne $_ }); if ($v.Count) { ($v | Measure-Object -Maximum).Maximum } else { $null } }
+    $cpu = & $avg 'Cpu'; $core = & $avg 'Core'; $gpu = & $avg 'Gpu'; $ram = & $mx 'Ram'
+    $vPct = $null
+    $vu = & $mx 'VU'; $vt = & $mx 'VT'
+    if ($vu -and $vt) { $vPct = 100.0 * $vu / $vt }
+    $rows = @(
+        @{ N = 'Procesor (total)'; A = $cpu; M = (& $mx 'Cpu') },
+        @{ N = 'Cel mai incarcat nucleu'; A = $core; M = (& $mx 'Core') },
+        @{ N = 'Placa video'; A = $gpu; M = (& $mx 'Gpu') },
+        @{ N = 'Memorie video (VRAM)'; A = $vPct; M = $vPct; X = $(if ($vu -and $vt) { "$vu / $vt MB" }) },
+        @{ N = 'Memorie RAM'; A = (& $avg 'Ram'); M = $ram })
+    $notes = @()
+    $capped = $false
+    if ($fps -and $refresh) { foreach ($cap in @($refresh, 30, 60, 120, 144, 165, 240)) { if ([math]::Abs($fps - $cap) -le [math]::Max(2, $cap * 0.03)) { $capped = $true } } }
+    if ($null -ne $gpu -and $gpu -ge 90) {
+        $v = 'Placa video lucreaza la maxim: e componenta care limiteaza FPS-ul, ceea ce e normal si ideal in jocuri. Pentru FPS mai mare: setari grafice mai mici, rezolutie mai mica sau upscaling (DLSS / FSR).'; $k = 'GPU'
+    } elseif ((($null -ne $cpu -and $cpu -ge 85) -or ($null -ne $core -and $core -ge 90)) -and ($null -eq $gpu -or $gpu -lt 85)) {
+        $k = 'CPU'
+        $v = 'BOTTLENECK PROCESOR: placa video asteapta dupa procesor.'
+        if ($null -ne $cpu -and $cpu -lt 60) { $v += ' Jocul foloseste intens doar cateva nuclee (limita pe un singur fir), deci conteaza viteza pe nucleu, nu numarul de nuclee.' }
+        $v += ' Ajuta: inchide aplicatiile din fundal (Mod joc), RAM cu XMP/EXPO pornit, setari de procesor din joc mai mici (distanta de vizibilitate, populatie, fizica).'
+    } elseif ($capped -and ($null -eq $gpu -or $gpu -lt 85)) {
+        $k = 'CAP'; $v = "FPS-ul e limitat (V-Sync, limita din joc sau din driver, aproape de $([int]$fps)): componentele mai au rezerva. Scoate limita daca vrei mai multe FPS."
+    } else {
+        $k = 'NONE'; $v = 'Nicio componenta nu e la limita: probabil limita motorului jocului, a serverului sau o limita de FPS.'
+    }
+    if ($null -eq $gpu) { $notes += 'Nu am putut citi incarcarea placii video, deci analiza e incompleta. Pe AMD / Intel ajuta LibreHardwareMonitor pornit.' }
+    if ($null -ne $vPct -and $vPct -ge 95) { $notes += 'VRAM aproape plin: scade calitatea texturilor, altfel pot aparea sacadari.' }
+    if ($null -ne $ram -and $ram -ge 90) { $notes += 'RAM aproape plin: inchide aplicatii sau adauga memorie.' }
+    $ct = & $mx 'Ct'; $gt = & $mx 'Gt'
+    if ($ct -ge 95) { $notes += "Procesorul a ajuns la $ct C: verifica racirea (poate scadea frecventa)." }
+    if ($gt -ge 85) { $notes += "Placa video a ajuns la $gt C: verifica ventilatoarele si praful." }
+    @{ Rows = $rows; Verdict = $v; Kind = $k; Notes = $notes; Ct = $ct; Gt = $gt }
+}
+
+function Get-BenchHistory { if (Test-Path $benchFile) { try { return @(Get-Content $benchFile -Raw | ConvertFrom-Json) } catch {} }; @() }
+function Add-BenchHistory($e) {
+    $h = @(Get-BenchHistory) + @([pscustomobject]$e)
+    if ($h.Count -gt 30) { $h = $h[($h.Count - 30)..($h.Count - 1)] }
+    if (-not (Test-Path $bkDir)) { New-Item $bkDir -ItemType Directory -Force | Out-Null }
+    ConvertTo-Json -InputObject @($h) -Depth 4 | Set-Content $benchFile -Encoding UTF8
+}
+function Get-Pct($new, $old) { if (-not $old -or -not $new) { return '' }; $p = 100.0 * ($new - $old) / $old; ('{0}{1:N0}%' -f $(if ($p -ge 0) { '+' } else { '' }), $p) }
+
+# --- panoul BOTTLENECK ---
+$botPanel = New-Object Windows.Controls.StackPanel
+$botG = @{ Name = 'Bottleneck'; Checks = @(); Col = '#FFC857'; Panel = $botPanel; NoBulk = $true }
+$botG.Badge = TB 'fa un test din BENCHMARK' 11 '#8A6A72' $false
+function Show-Bottleneck($b, $title) {
+    $botPanel.Children.Clear()
+    if (-not $b) {
+        $t = TB 'Aici apare ce componenta iti limiteaza performanta. Porneste un Test FPS in joc (sau testul de stres) din folderul BENCHMARK, iar rezultatul apare automat aici.' 12 '#F3E6EA' $false
+        $t.TextWrapping = 'Wrap'; $botPanel.Children.Add($t) | Out-Null; return
+    }
+    $hd = TB $title 12 '#FF7A93' $true; $hd.TextWrapping = 'Wrap'; $hd.Margin = '0,0,0,10'; $botPanel.Children.Add($hd) | Out-Null
+    foreach ($r in $b.Rows) {
+        $gr = New-Object Windows.Controls.Grid; $gr.Margin = '0,0,0,8'
+        foreach ($wd in @((New-Object Windows.GridLength 210), (New-Object Windows.GridLength 1, ([Windows.GridUnitType]::Star)), (New-Object Windows.GridLength 190))) {
+            $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = $wd; $gr.ColumnDefinitions.Add($cd) }
+        $n = TB $r.N 12 '#F3E6EA' $true; $n.VerticalAlignment = 'Center'
+        $pb = New-Object Windows.Controls.ProgressBar; $pb.Height = 14; $pb.Minimum = 0; $pb.Maximum = 100; $pb.BorderThickness = 0; $pb.Background = Br '#1F0A10'
+        $a = $(if ($null -ne $r.A) { [double]$r.A } else { 0 }); $pb.Value = $a
+        $pb.Foreground = Br $(if ($a -ge 90) { '#FF2E4D' } elseif ($a -ge 70) { '#FF9F1C' } else { '#4ADE80' })
+        [Windows.Controls.Grid]::SetColumn($pb, 1)
+        $vt = $(if ($null -eq $r.A) { 'n/a' } else { 'medie {0:N0}%  max {1:N0}%' -f $r.A, $r.M }); if ($r.X) { $vt += "  ($($r.X))" }
+        $v = TB $vt 11 '#FFB7C5' $false; $v.Margin = '10,0,0,0'; $v.VerticalAlignment = 'Center'; [Windows.Controls.Grid]::SetColumn($v, 2)
+        $gr.Children.Add($n) | Out-Null; $gr.Children.Add($pb) | Out-Null; $gr.Children.Add($v) | Out-Null
+        $botPanel.Children.Add($gr) | Out-Null
+    }
+    $vb = New-Object Windows.Controls.Border; $vb.CornerRadius = 10; $vb.Padding = '12,9'; $vb.Margin = '0,6,0,0'; $vb.BorderThickness = 1
+    $vb.Background = Br '#1A060C'; $vb.BorderBrush = Br $(if ($b.Kind -eq 'CPU') { '#FF2E4D' } elseif ($b.Kind -eq 'GPU') { '#4ADE80' } else { '#FF9F1C' })
+    $vs = New-Object Windows.Controls.StackPanel
+    $vt2 = TB $b.Verdict 12.5 '#FFE4EA' $true; $vt2.TextWrapping = 'Wrap'; $vs.Children.Add($vt2) | Out-Null
+    foreach ($nn in $b.Notes) { $x = TB "- $nn" 11.5 '#FFB7C5' $false; $x.TextWrapping = 'Wrap'; $x.Margin = '0,5,0,0'; $vs.Children.Add($x) | Out-Null }
+    $vb.Child = $vs; $botPanel.Children.Add($vb) | Out-Null
+    $botG.Badge.Text = $(switch ($b.Kind) { 'GPU' { 'limita: placa video' } 'CPU' { 'BOTTLENECK PROCESOR' } 'CAP' { 'FPS limitat' } default { 'fara limita clara' } })
+    $botG.Badge.Foreground = Br $(if ($b.Kind -eq 'CPU') { '#FF2E4D' } else { '#FF6B86' })
+}
+Show-Bottleneck $null ''
+
+# --- panoul BENCHMARK ---
+$benchPanel = New-Object Windows.Controls.StackPanel
+$benchG = @{ Name = 'Benchmark'; Checks = @(); Col = '#FF9F1C'; Panel = $benchPanel; NoBulk = $true }
+$benchG.Badge = TB 'test FPS si test de stres' 11 '#8A6A72' $false
+function Add-BenchText($t, $size, $col, $bold, $margin) { $x = TB $t $size $col $bold; $x.TextWrapping = 'Wrap'; $x.Margin = $margin; $benchPanel.Children.Add($x) | Out-Null; $x }
+Add-BenchText 'TEST FPS IN JOC' 13 '#FF9F1C' $true '0,0,0,4' | Out-Null
+Add-BenchText 'Apasa PORNESTE, apoi in 10 secunde intra in joc (sau intr-un benchmark gratuit, de ex. Unigine Superposition) si joaca normal. Masurarea se face cu PresentMon de la Intel (fara injectare in joc, merge si cu anti-cheat). La prima folosire se descarca PresentMon (aprox. 1 MB) de pe GitHub-ul Intel si i se verifica semnatura SHA256.' 11 '#FF7A93' $false '0,0,0,8' | Out-Null
+$fpsRow = New-Object Windows.Controls.StackPanel; $fpsRow.Orientation = 'Horizontal'; $fpsRow.Margin = '0,0,0,8'
+$durBox = New-Object Windows.Controls.ComboBox; $durBox.Width = 110; $durBox.Margin = '0,0,10,0'; $durBox.VerticalContentAlignment = 'Center'
+foreach ($d in '30 secunde', '60 secunde', '120 secunde') { [void]$durBox.Items.Add($d) }; $durBox.SelectedIndex = 1
+$btnFps = New-PillBtn 'PORNESTE TEST FPS'; $btnFps.Margin = '0'
+$fpsRow.Children.Add($durBox) | Out-Null; $fpsRow.Children.Add($btnFps) | Out-Null
+$benchPanel.Children.Add($fpsRow) | Out-Null
+$fpsOut = Add-BenchText '' 12.5 '#FFE4EA' $true '0,0,0,16'
+Add-BenchText 'TEST LA CAPACITATE MAXIMA' 13 '#FF9F1C' $true '0,4,0,4' | Out-Null
+Add-BenchText 'Solicita fiecare componenta la 100%: procesorul pe un nucleu si pe toate nucleele, RAM-ul, discul de sistem (scriere si citire reale, fara cache) si placa video (scena 3D DirectX cu efecte de shader, pe tot ecranul, 20 s). Dureaza aproximativ 1 minut. Inchide jocurile si aplicatiile grele inainte. ESC opreste testul grafic.' 11 '#FF7A93' $false '0,0,0,8' | Out-Null
+$btnStress = New-PillBtn 'PORNESTE TESTUL DE STRES'
+$benchPanel.Children.Add($btnStress) | Out-Null
+$bmBar = New-Object Windows.Controls.ProgressBar; $bmBar.Height = 5; $bmBar.Minimum = 0; $bmBar.Maximum = 100; $bmBar.BorderThickness = 0
+$bmBar.Background = Br '#1F0A10'; $bmBar.Foreground = Br '#FF9F1C'; $bmBar.Margin = '0,0,0,8'
+$benchPanel.Children.Add($bmBar) | Out-Null
+$stressOut = Add-BenchText '' 12.5 '#FFE4EA' $true '0,0,0,4'
+$lastF = @(Get-BenchHistory | Where-Object { $_.Type -eq 'fps' }) | Select-Object -Last 1
+if ($lastF) { $fpsOut.Text = "Ultimul test ($($lastF.Date)): $($lastF.App)  -  $([int]$lastF.Avg) FPS mediu, 1% low $([int]$lastF.Low1)"; $benchG.Badge.Text = "ultimul: $([int]$lastF.Avg) FPS" }
+$lastS = @(Get-BenchHistory | Where-Object { $_.Type -eq 'stress' }) | Select-Object -Last 1
+if ($lastS) { $stressOut.Text = "Ultimul test de stres ($($lastS.Date)): CPU $([int]$lastS.CpuMulti) puncte, GPU $([int]$lastS.GpuFps) FPS" }
+
+function Set-BenchBusy($on) { $script:bm.Busy = $on; $btnFps.IsEnabled = -not $on; $btnStress.IsEnabled = -not $on; $BtnApply.IsEnabled = -not $on }
+$script:refreshHz = [int](($script:gpuAdapters | Measure-Object CurrentRefreshRate -Maximum).Maximum)
+
+# Test FPS: totul ruleaza in fundal; interfata doar afiseaza starea
+$btnFps.Add_Click({
+    if ($script:bm.Busy) { return }
+    if (-not $BtnApply.IsEnabled) { Say 'Asteapta sa se termine optimizarea, apoi porneste testul.'; return }
+    $dur = @(30, 60, 120)[$durBox.SelectedIndex]
+    Set-BenchBusy $true
+    $script:bm.Stage = 'start'; $script:bm.Msg = 'Pregatesc testul...'; $script:bm.Res = $null; $script:bm.Err = $null; $script:bm.Kind = 'fps'
+    $r = [runspacefactory]::CreateRunspace(); $r.Open()
+    $script:bmPs = [powershell]::Create(); $script:bmPs.Runspace = $r
+    [void]$script:bmPs.AddScript({
+        param($bm, $pmExe, $pmUrl, $pmSha, $dur, $csv, $vramMB, $sampleDef)
+        . ([scriptblock]::Create($sampleDef))
+        try {
+            $ok = (Test-Path $pmExe) -and ((Get-FileHash $pmExe -Algorithm SHA256).Hash -eq $pmSha.ToUpper())
+            if (-not $ok) {
+                $bm.Msg = 'Descarc PresentMon de pe GitHub-ul Intel...'
+                New-Item (Split-Path $pmExe) -ItemType Directory -Force | Out-Null
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                $ProgressPreference = 'SilentlyContinue'
+                Invoke-WebRequest -Uri $pmUrl -OutFile "$pmExe.tmp" -UseBasicParsing -TimeoutSec 120 -Headers @{ 'User-Agent' = '5AMOptimizer' }
+                if ((Get-FileHash "$pmExe.tmp" -Algorithm SHA256).Hash -ne $pmSha.ToUpper()) { Remove-Item "$pmExe.tmp" -Force; throw 'PresentMon descarcat nu are semnatura SHA256 corecta, l-am sters.' }
+                Move-Item "$pmExe.tmp" $pmExe -Force
+            }
+            for ($i = 10; $i -ge 1; $i--) { $bm.Msg = "Intra in joc acum! Masurarea incepe in $i s..."; Start-Sleep -Seconds 1 }
+            [Media.SystemSounds]::Exclamation.Play()
+            Remove-Item $csv -Force -ErrorAction SilentlyContinue
+            $args2 = @('--v1_metrics', '--timed', "$dur", '--terminate_after_timed', '--no_console_stats', '--stop_existing_session',
+                       '--session_name', '5AMOptimizer', '--output_file', "`"$csv`"", '--exclude', 'dwm.exe', '--exclude', '5AMOptimizer.exe')
+            $p = Start-Process -FilePath $pmExe -ArgumentList $args2 -WindowStyle Hidden -PassThru
+            $samples = New-Object Collections.ArrayList
+            $t0 = Get-Date
+            while (-not $p.HasExited) {
+                $left = [int]($dur - ((Get-Date) - $t0).TotalSeconds); if ($left -lt 0) { $left = 0 }
+                $bm.Msg = "Masor... $left s ramase (joaca normal)"; $bm.Pct = [int](100 * (1 - $left / $dur))
+                [void]$samples.Add((Get-HwSample $vramMB))
+                if (((Get-Date) - $t0).TotalSeconds -gt $dur + 30) { try { $p.Kill() } catch {}; break }
+                Start-Sleep -Milliseconds 700
+            }
+            [Media.SystemSounds]::Asterisk.Play()
+            if (-not (Test-Path $csv)) { throw 'PresentMon nu a salvat nimic (porneste aplicatia ca administrator).' }
+            $bm.Msg = 'Calculez rezultatele...'
+            $rows = @(Import-Csv $csv)
+            if (-not $rows.Count) { throw 'Nu a fost randat niciun cadru: jocul era deschis si in prim-plan?' }
+            $col = @($rows[0].PSObject.Properties.Name | Where-Object { $_ -match '^(MsBetweenPresents|FrameTime)$' })[0]
+            if (-not $col) { throw 'Format CSV PresentMon necunoscut.' }
+            $skip = '^(dwm|explorer|chrome|msedge|msedgewebview2|firefox|opera|brave|discord|steamwebhelper|epicwebhelper|searchhost|startmenuexperiencehost|shellexperiencehost|textinputhost|applicationframehost|nvidia overlay|nvcontainer|radeonsoftware|amdrsserv|obs64|spotify|ms-teams|teams|5amoptimizer|powershell|lockapp|widgets)\.exe$'
+            $grp = $rows | Where-Object { $_.Application -and $_.Application -notmatch $skip } | Group-Object Application | Sort-Object Count -Descending | Select-Object -First 1
+            if (-not $grp -or $grp.Count -lt 30) { throw 'Nu am gasit niciun joc care sa randeze in timpul testului.' }
+            $inv = [Globalization.CultureInfo]::InvariantCulture
+            $ft = [double[]]@($grp.Group | ForEach-Object { $v = 0.0; if ([double]::TryParse($_.$col, [Globalization.NumberStyles]::Float, $inv, [ref]$v)) { $v } })
+            $pm = ($grp.Group | Group-Object PresentMode | Sort-Object Count -Descending | Select-Object -First 1).Name
+            $bm.Res = @{ App = $grp.Name; Ft = $ft; Mode = $pm; Samples = @($samples) }
+            $bm.Stage = 'done'
+        } catch { $bm.Err = $_.Exception.Message; $bm.Stage = 'error' }
+    }).AddArgument($script:bm).AddArgument($pmExe).AddArgument($pmUrl).AddArgument($pmSha).AddArgument($dur).AddArgument("$bkDir\fps_last.csv").AddArgument($script:gpuVramMB).AddArgument($script:sampleDef)
+    [void]$script:bmPs.BeginInvoke()
+    $bmTimer.Start()
+})
+
+# Test de stres: CPU / RAM / disc in fundal, apoi GPU pe ecran
+$btnStress.Add_Click({
+    if ($script:bm.Busy) { return }
+    if (-not $BtnApply.IsEnabled) { Say 'Asteapta sa se termine optimizarea, apoi porneste testul.'; return }
+    Set-BenchBusy $true
+    $script:bm.Stage = 'start'; $script:bm.Msg = 'Pregatesc testul de stres...'; $script:bm.Res = $null; $script:bm.Err = $null; $script:bm.Kind = 'stress'
+    $script:bm.Sampling = $true; $script:bmSamples.Clear()
+    # citire senzori pe toata durata testului
+    $r1 = [runspacefactory]::CreateRunspace(); $r1.Open()
+    $script:bmSp = [powershell]::Create(); $script:bmSp.Runspace = $r1
+    [void]$script:bmSp.AddScript({
+        param($bm, $list, $vramMB, $sampleDef)
+        . ([scriptblock]::Create($sampleDef))
+        while ($bm.Sampling) { $s = Get-HwSample $vramMB; $s.Stage = [string]$bm.Stage; [void]$list.Add($s); Start-Sleep -Milliseconds 800 }
+    }).AddArgument($script:bm).AddArgument($script:bmSamples).AddArgument($script:gpuVramMB).AddArgument($script:sampleDef)
+    [void]$script:bmSp.BeginInvoke()
+    $r2 = [runspacefactory]::CreateRunspace(); $r2.Open()
+    $script:bmPs = [powershell]::Create(); $script:bmPs.Runspace = $r2
+    [void]$script:bmPs.AddScript({
+        param($bm, $cs, $tmp)
+        try {
+            $bm.Msg = 'Compilez testele...'
+            if (-not ('FiveAmBench' -as [type])) { Add-Type -TypeDefinition $cs -ReferencedAssemblies PresentationCore, PresentationFramework, WindowsBase, System.Xaml -ErrorAction Stop }
+            $n = [Environment]::ProcessorCount
+            $bm.Stage = 'cpu1'; $bm.Msg = 'Procesor, un singur nucleu (8 s)...'; $bm.Pct = 5
+            $c1 = [FiveAmBench]::Cpu(1, 8000)
+            $bm.Stage = 'cpuN'; $bm.Msg = "Procesor, toate cele $n fire la 100% (20 s)..."; $bm.Pct = 20
+            $cN = [FiveAmBench]::Cpu($n, 20000)
+            $bm.Stage = 'ram'; $bm.Msg = 'Memorie RAM (6 s)...'; $bm.Pct = 50
+            $th = [math]::Min(8, [math]::Max(2, [int]($n / 2)))
+            $ram = [FiveAmBench]::Ram($th, 64, 6000)
+            $bm.Stage = 'disk'; $bm.Msg = "Disc de sistem $($env:SystemDrive) (scriere + citire 1 GB)..."; $bm.Pct = 60
+            $dk = $null; $dkErr = $null
+            try { $dk = [FiveAmBench]::Disk((Join-Path $tmp '5am_disktest.bin'), 1024) } catch { $dkErr = $_.Exception.Message }
+            $bm.Res = @{ C1 = $c1; CN = $cN; Th = $n; Ram = $ram; DiskW = $(if ($dk) { $dk[0] }); DiskR = $(if ($dk) { $dk[1] }); DiskErr = $dkErr }
+            $bm.Stage = 'gpu-start'
+        } catch { $bm.Err = $_.Exception.Message; $bm.Stage = 'error' }
+    }).AddArgument($script:bm).AddArgument($script:benchCs).AddArgument($env:TEMP)
+    [void]$script:bmPs.BeginInvoke()
+    $bmTimer.Start()
+})
+
+function Start-GpuStress {
+    $script:bm.Stage = 'gpu'; $script:bm.Msg = 'Placa video: scena 3D pe tot ecranul (20 s, ESC opreste)...'; $script:bm.Pct = 75
+    $gw = New-Object Windows.Window
+    $gw.WindowStyle = 'None'; $gw.ResizeMode = 'NoResize'; $gw.WindowState = 'Maximized'; $gw.Topmost = $true; $gw.Background = Br '#050103'
+    $gw.Title = '5AM Optimizer - test GPU'
+    $gg = New-Object Windows.Controls.Grid; $gw.Content = $gg
+    $script:gpuSt = [FiveAmGpu]::Build($gg, 220)
+    $script:gpuLbl = TB 'TEST GPU' 20 '#FFE4EA' $true; $script:gpuLbl.Margin = '30,24,0,0'; $script:gpuLbl.HorizontalAlignment = 'Left'; $script:gpuLbl.VerticalAlignment = 'Top'
+    $script:gpuLbl.Effect = New-Object Windows.Media.Effects.DropShadowEffect -Property @{ Color = [Windows.Media.Color]::FromRgb(255, 46, 77); BlurRadius = 16; ShadowDepth = 0 }
+    $gg.Children.Add($script:gpuLbl) | Out-Null
+    $gw.Add_KeyDown({ if ($_.Key -eq 'Escape') { $script:bm.GpuCancel = $true } })
+    $script:bm.GpuCancel = $false
+    $script:gpuWin = $gw
+    $gw.Show(); $gw.Activate() | Out-Null
+    $script:gpuSt.Start()
+}
+function Stop-GpuStress {
+    $sec = $script:gpuSt.Seconds; $fr = $script:gpuSt.Frames
+    $script:gpuSt.Stop(); $script:gpuWin.Close()
+    $res = $script:bm.Res
+    $res.GpuFps = $(if ($sec -gt 0) { $fr / $sec } else { 0 }); $res.GpuCancel = [bool]$script:bm.GpuCancel
+    $res.Res = "$([int][Windows.SystemParameters]::PrimaryScreenWidth)x$([int][Windows.SystemParameters]::PrimaryScreenHeight)"
+    $script:bm.Stage = 'stress-done'
+}
+
+function Finish-Bench {
+    $bmTimer.Stop(); $script:bm.Sampling = $false; $bmBar.Value = 100
+    try { $script:bmPs.Dispose() } catch {}
+    $now = (Get-Date).ToString('yyyy-MM-dd HH:mm')
+    if ($script:bm.Stage -eq 'error') {
+        $msg = "Testul nu a reusit: $($script:bm.Err)"
+        if ($script:bm.Kind -eq 'fps') { $fpsOut.Text = $msg } else { $stressOut.Text = $msg }
+        Say "BENCHMARK: $msg"
+    } elseif ($script:bm.Kind -eq 'fps') {
+        $r = $script:bm.Res; $st = Get-FrameStats $r.Ft
+        if (-not $st) { $fpsOut.Text = 'Prea putine cadre pentru un rezultat.'; Set-BenchBusy $false; return }
+        $prev = @(Get-BenchHistory | Where-Object { $_.Type -eq 'fps' -and $_.App -eq $r.App }) | Select-Object -Last 1
+        $txt = "$($r.App)   |   $([int]$st.Sec) s   |   $($st.Frames) cadre`n" +
+               ("FPS mediu: {0:N0}     1% low: {1:N0}     0.1% low: {2:N0}`n" -f $st.Avg, $st.Low1, $st.Low01) +
+               ("Minim: {0:N0}   Maxim: {1:N0}   Mod afisare: {2}" -f $st.Min, $st.Max, $r.Mode)
+        if ($prev) { $txt += "`nFata de testul anterior pe acest joc ($($prev.Date)): FPS mediu $(Get-Pct $st.Avg $prev.Avg), 1% low $(Get-Pct $st.Low1 $prev.Low1)" }
+        $fpsOut.Text = $txt
+        $b = Get-Bottleneck $r.Samples $st.Avg $script:refreshHz
+        Show-Bottleneck $b "Ultimul test FPS: $($r.App), $now, $([int]$st.Avg) FPS mediu"
+        $benchG.Badge.Text = "ultimul: $([int]$st.Avg) FPS"
+        Add-BenchHistory @{ Type = 'fps'; Date = $now; App = $r.App; Avg = [math]::Round($st.Avg, 1); Low1 = [math]::Round($st.Low1, 1); Low01 = [math]::Round($st.Low01, 1); Sec = [int]$st.Sec }
+        Say ("BENCHMARK FPS: {0}  mediu {1:N0}, 1% low {2:N0}, 0.1% low {3:N0}" -f $r.App, $st.Avg, $st.Low1, $st.Low01)
+        Say "BOTTLENECK: $($b.Verdict)"
+    } else {
+        $r = $script:bm.Res
+        $samp = @($script:bmSamples)
+        $mxOf = { param($k, $stages) $v = @($samp | Where-Object { $stages -contains $_.Stage } | ForEach-Object { $_[$k] } | Where-Object { $null -ne $_ }); if ($v.Count) { ($v | Measure-Object -Maximum).Maximum } else { $null } }
+        $avOf = { param($k, $stages) $v = @($samp | Where-Object { $stages -contains $_.Stage } | ForEach-Object { $_[$k] } | Where-Object { $null -ne $_ }); if ($v.Count) { ($v | Measure-Object -Average).Average } else { $null } }
+        $ct = & $mxOf 'Ct' @('cpu1', 'cpuN', 'ram', 'disk', 'gpu'); $gt = & $mxOf 'Gt' @('gpu'); $gl = & $avOf 'Gpu' @('gpu'); $cl = & $avOf 'Cpu' @('cpuN')
+        $prev = @(Get-BenchHistory | Where-Object { $_.Type -eq 'stress' }) | Select-Object -Last 1
+        $l = @()
+        $l += ('Procesor: 1 nucleu {0:N0} puncte   |   toate cele {1} fire {2:N0} puncte{3}' -f $r.C1, $r.Th, $r.CN, $(if ($null -ne $cl) { "  (incarcare {0:N0}%)" -f $cl }))
+        $l += ('Memorie RAM: {0:N1} GB/s copiere' -f $r.Ram)
+        if ($r.DiskErr) { $l += "Disc $($env:SystemDrive): $($r.DiskErr)" } else { $l += ('Disc {0}: scriere {1:N0} MB/s   |   citire {2:N0} MB/s' -f $env:SystemDrive, $r.DiskW, $r.DiskR) }
+        $l += ('Placa video: {0:N0} FPS la {1}{2}{3}' -f $r.GpuFps, $r.Res, $(if ($null -ne $gl) { "  (incarcare medie {0:N0}%)" -f $gl }), $(if ($r.GpuCancel) { '  [oprit cu ESC]' }))
+        $l += 'Temperaturi maxime: CPU ' + $(if ($null -ne $ct) { "$ct C" } else { 'n/a' }) + '   GPU ' + $(if ($null -ne $gt) { "$gt C" } else { 'n/a' }) + $(if ($null -eq $ct) { '   (porneste LibreHardwareMonitor pentru CPU)' } else { '' })
+        if ($r.GpuFps -ge ($script:refreshHz - 3) -and $script:refreshHz -gt 0) { $l += "Nota: testul GPU a atins limita monitorului ($($script:refreshHz) Hz), deci placa ta e mai rapida decat poate arata acest test." }
+        if ($prev) { $l += "Fata de testul anterior ($($prev.Date)): CPU $(Get-Pct $r.CN $prev.CpuMulti), 1 nucleu $(Get-Pct $r.C1 $prev.CpuSingle), RAM $(Get-Pct $r.Ram $prev.Ram), GPU $(Get-Pct $r.GpuFps $prev.GpuFps)" }
+        if ($ct -ge 95) { $l += "ATENTIE: procesorul a ajuns la $ct C. Verifica racirea." }
+        if ($gt -ge 85) { $l += "ATENTIE: placa video a ajuns la $gt C. Verifica ventilatoarele." }
+        $stressOut.Text = $l -join "`n"
+        $gs = @($samp | Where-Object { $_.Stage -eq 'gpu' })
+        $b = Get-Bottleneck $gs $null $null
+        $b.Verdict = 'Test de stres: arata cat de incarcata a fost fiecare componenta in testul grafic. Pentru bottleneck-ul real din jocuri foloseste Test FPS in joc. ' + $b.Verdict
+        Show-Bottleneck $b "Test de stres, $now (partea grafica)"
+        Add-BenchHistory @{ Type = 'stress'; Date = $now; CpuSingle = [math]::Round($r.C1); CpuMulti = [math]::Round($r.CN); Ram = [math]::Round($r.Ram, 2); DiskW = [math]::Round([double]$r.DiskW); DiskR = [math]::Round([double]$r.DiskR); GpuFps = [math]::Round($r.GpuFps, 1); Ct = $ct; Gt = $gt }
+        foreach ($x in $l) { Say "STRES: $x" }
+    }
+    Set-BenchBusy $false
+}
+
+$bmTimer = New-Object Windows.Threading.DispatcherTimer; $bmTimer.Interval = [TimeSpan]::FromMilliseconds(250)
+$bmTimer.Add_Tick({
+    try {
+        $st = [string]$script:bm.Stage
+        if ($script:bm.Pct) { $bmBar.Value = [int]$script:bm.Pct }
+        $m = [string]$script:bm.Msg
+        if ($script:bm.Kind -eq 'fps') { if ($st -notin 'done', 'error') { $fpsOut.Text = $m } } else { if ($st -notin 'stress-done', 'error') { $stressOut.Text = $m } }
+        if ($st -eq 'gpu-start') { Start-GpuStress; return }
+        if ($st -eq 'gpu') {
+            $left = [int](20 - $script:gpuSt.Seconds)
+            $fpsNow = $(if ($script:gpuSt.Seconds -gt 0.5) { [int]($script:gpuSt.Frames / $script:gpuSt.Seconds) } else { 0 })
+            $script:gpuLbl.Text = "5AM OPTIMIZER  |  TEST GPU  |  $fpsNow FPS  |  $left s  (ESC opreste)"
+            $bmBar.Value = 75 + [int](25 * [math]::Min(1, $script:gpuSt.Seconds / 20))
+            if ($script:gpuSt.Seconds -ge 20 -or $script:bm.GpuCancel) { Stop-GpuStress }
+            return
+        }
+        if ($st -in 'done', 'error', 'stress-done') { Finish-Bench }
+    } catch { $script:bm.Err = $_.Exception.Message; $script:bm.Stage = 'error'; try { if ($script:gpuWin) { $script:gpuSt.Stop(); $script:gpuWin.Close() } } catch {}; Finish-Bench }
+})
+
+New-FolderTile $benchG (Emo 0x1F3C1) 'BENCHMARK FPS SI STRES'
+New-FolderTile $botG (Emo 0x1F6A7) 'BOTTLENECK'
+
 function Find-Game {
     $re = '\\steamapps\\common\\|\\Epic Games\\|\\GOG Galaxy\\Games\\|\\GOG Games\\|\\Riot Games\\|\\XboxGames\\|\\Ubisoft Game Launcher\\games\\|\\EA Games\\|\\Origin Games\\|\\Rockstar Games\\'
     $skip = 'Launcher|Helper|Riot Client|CrashHandler|Crash Handler|Installer|Setup|Redist|vc_redist'
@@ -1520,6 +2107,20 @@ if ($SelfTest) {
         if (((Get-Content "$td\app.exe" -Raw).Trim() -ne 'new') -or (Test-Path "$td\app.exe.new")) { $errs += 'inlocuirea fisierului exe a esuat' }
         Remove-Item $td -Recurse -Force -ErrorAction SilentlyContinue
     } catch { $errs += "test inlocuire: $($_.Exception.Message)" }
+    # benchmark: compilare C#, teste scurte CPU / RAM / disc, scena GPU, statistici FPS, bottleneck
+    try {
+        Initialize-BenchTypes
+        if (-not ([FiveAmBench]::Cpu(1, 300) -gt 0)) { $errs += 'benchmark CPU' }
+        if (-not ([FiveAmBench]::Ram(2, 8, 300) -gt 0)) { $errs += 'benchmark RAM' }
+        $dk = [FiveAmBench]::Disk((Join-Path $env:TEMP '5am_st_disk.bin'), 64)
+        if (-not ($dk[0] -gt 0 -and $dk[1] -gt 0)) { $errs += 'benchmark disc' }
+        $tg = New-Object Windows.Controls.Grid; $gs = [FiveAmGpu]::Build($tg, 10); if ($tg.Children.Count -lt 2) { $errs += 'scena GPU' }
+        $ftT = [double[]](@(10.0) * 100 + 50.0); $fs = Get-FrameStats $ftT
+        if ([math]::Abs($fs.Avg - 96.19) -gt 0.1 -or [math]::Abs($fs.Low1 - 33.33) -gt 0.1) { $errs += "statistici FPS gresite: $($fs.Avg) / $($fs.Low1)" }
+        $smp = @(@{ Cpu = 40; Core = 97; Gpu = 60; VU = 7000; VT = 8192; Ram = 50 }, @{ Cpu = 45; Core = 95; Gpu = 62; VU = 7100; VT = 8192; Ram = 52 })
+        $bn = Get-Bottleneck $smp 120 240; if ($bn.Kind -ne 'CPU') { $errs += "bottleneck: $($bn.Kind)" }
+        Show-Bottleneck $bn 'test'
+    } catch { $errs += "benchmark: $($_.Exception.Message)" }
     Show-Banner 'test' 'ok' 'TEST'
     $out = if ($errs.Count) { @('SELFTEST FAIL') + $errs } else { @("SELFTEST OK - $($script:checks.Count) optimizari, v$AppVersion") }
     Set-Content -Path (Join-Path $env:TEMP '5am_selftest.txt') -Value $out
