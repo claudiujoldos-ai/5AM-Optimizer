@@ -2,6 +2,8 @@
 
 # 5AM Optimizer - Gaming Edition
 
+> **English:** Windows 11 gaming optimizer with a cherry-blossom UI: turns off AI / Copilot / Recall and telemetry, tunes power, GPU, network and FPS settings, measures real in-game FPS (PresentMon), finds bottlenecks and proves the gain with a before / after card. Everything is reversible and never touches game processes (safe with anti-cheat). Download: [5AMOptimizer.exe](https://github.com/claudiujoldos-ai/5AM-Optimizer/releases/latest/download/5AMOptimizer.exe). Switch the language to English in **APP SETTINGS** (Windows in a language other than Romanian starts in English automatically).
+
 Aplicatie cu interfata grafica (WPF) pentru Windows 11 care dezactiveaza functiile AI / Copilot, reduce telemetria si aplica optimizari pentru gaming.
 
 ## Ce face

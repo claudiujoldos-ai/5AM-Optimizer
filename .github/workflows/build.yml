@@ -10,6 +10,7 @@ on:
       - '5AMOptimizer.ps1'
       - 'RELEASE_NOTES.md'
       - 'assets/**'
+      - 'lang/**'
       - '.github/workflows/build.yml'
     tags: ['v*']
   workflow_dispatch:
@@ -67,6 +68,18 @@ jobs:
           $new = @($src[0..($i - 1)]) + '$script:iconPack = @{' + @($lines) + '}' + @($src[($i + 1)..($src.Count - 1)])
           Set-Content .\5AMOptimizer.ps1 $new -Encoding UTF8
           "Iconite incorporate: $($files.Count)"
+
+      - name: Incorporeaza traducerea in engleza
+        shell: powershell
+        run: |
+          $json = [IO.File]::ReadAllText((Resolve-Path .\lang\en.json))
+          $null = $json | ConvertFrom-Json
+          $src = @(Get-Content .\5AMOptimizer.ps1)
+          $i = [array]::IndexOf($src, "`$script:langPack = ''")
+          if ($i -lt 1) { throw 'Nu gasesc linia $script:langPack in script' }
+          $new = @($src[0..($i - 1)]) + "`$script:langPack = @'" + @($json -split "`r?`n") + "'@" + @($src[($i + 1)..($src.Count - 1)])
+          Set-Content .\5AMOptimizer.ps1 $new -Encoding UTF8
+          "Traducere incorporata: $($json.Length) caractere"
 
       - name: Auto-test (script)
         shell: powershell

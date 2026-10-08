@@ -3,7 +3,7 @@
 param([switch]$SelfTest, [switch]$Tray)
 
 # Versiunea se suprascrie automat din tag-ul GitHub la build (v1.2.3 -> 1.2.3). Nu o muta de pe linia asta.
-$AppVersion = '1.5.0'
+$AppVersion = '1.6.0'
 # Repo-ul GitHub de unde se descarca actualizarile (owner/repo)
 $UpdateRepo = 'claudiujoldos-ai/5AM-Optimizer'
 
@@ -45,9 +45,44 @@ $bkDir = "$env:APPDATA\WinGameOptimizer"; $bkFile = "$bkDir\backup.json"
 
 # ---------- Setari aplicatie (tema, petale, langa ceas) ----------
 $script:cfgFile = "$bkDir\settings.json"
-$script:cfg = @{ Theme = 'sakura'; Petals = $true; Tray = $false }
+$script:cfg = @{ Theme = 'sakura'; Petals = $true; Tray = $false; Lang = $(if ([Globalization.CultureInfo]::CurrentUICulture.TwoLetterISOLanguageName -eq 'ro') { 'ro' } else { 'en' }) }
 try { if (Test-Path $script:cfgFile) { $j = Get-Content $script:cfgFile -Raw | ConvertFrom-Json
-      foreach ($pn in 'Theme', 'Petals', 'Tray') { if ($null -ne $j.$pn) { $script:cfg[$pn] = $j.$pn } } } } catch {}
+      foreach ($pn in 'Theme', 'Petals', 'Tray', 'Lang') { if ($null -ne $j.$pn) { $script:cfg[$pn] = $j.$pn } } } } catch {}
+
+# ---------- Limba (RO / EN) ----------
+# @@LANGPACK@@ build-ul de pe GitHub inlocuieste linia urmatoare cu lang\en.json incorporat
+$script:langPack = ''
+$script:lang = $(if ($script:cfg.Lang -eq 'en') { 'en' } else { 'ro' })
+$script:trExact = New-Object 'System.Collections.Generic.Dictionary[string,string]'; $script:trPhr = New-Object 'System.Collections.Generic.Dictionary[string,string]'; $script:trRx = $null
+# lang\en.json: perechi [romana, engleza]; dictionarele tin cont de litere mari (ex. 'MOD JOC' si 'Mod joc')
+function Import-LangPack([string]$js) {
+    $o = $js | ConvertFrom-Json
+    foreach ($pr2 in @($o.exact)) { $script:trExact[[string]$pr2[0]] = [string]$pr2[1] }
+    foreach ($pr2 in @($o.phrases)) { $script:trPhr[[string]$pr2[0]] = [string]$pr2[1] }
+    foreach ($k in @($script:trExact.Keys)) { if ($k.Length -ge 14 -and -not $script:trPhr.ContainsKey($k)) { $script:trPhr[$k] = $script:trExact[$k] } }
+    $keys = @($script:trPhr.Keys | Sort-Object { $_.Length } -Descending | ForEach-Object { [regex]::Escape($_) })
+    if ($keys.Count) { $script:trRx = New-Object Text.RegularExpressions.Regex(($keys -join '|'), [Text.RegularExpressions.RegexOptions]::Compiled) }
+}
+if ($script:lang -eq 'en') {
+    try {
+        $js = $script:langPack
+        if (-not $js -and $PSCommandPath) { $lf = Join-Path (Split-Path $PSCommandPath) 'lang\en.json'; if (Test-Path -LiteralPath $lf) { $js = [IO.File]::ReadAllText($lf) } }
+        # textele exacte lungi apar si in mesaje compuse (ex. "OK   <optimizare>"), deci intra si ca fragmente
+        if ($js) { Import-LangPack $js } else { $script:lang = 'ro' }
+    } catch { $script:lang = 'ro' }
+}
+$script:trEval = [Text.RegularExpressions.MatchEvaluator] { param($mm) $script:trPhr[$mm.Value] }
+function T([string]$s) {
+    if ($script:lang -ne 'en' -or -not $s) { return $s }
+    $e = $null; if ($script:trExact.TryGetValue($s, [ref]$e)) { return $e }
+    if ($script:trRx) { return $script:trRx.Replace($s, $script:trEval) }
+    $s
+}
+# textele care se schimba in timp (rezultate, stari) se traduc automat la fiecare schimbare
+$script:inT = $false
+$script:tDesc = [ComponentModel.DependencyPropertyDescriptor]::FromProperty([Windows.Controls.TextBlock]::TextProperty, [Windows.Controls.TextBlock])
+$script:tHandler = [EventHandler] { param($sx, $ex) if ($script:inT) { return }; $n = T $sx.Text; if ($n -ne $sx.Text) { $script:inT = $true; try { $sx.Text = $n } finally { $script:inT = $false } } }
+function Add-THook($tb) { if ($script:lang -eq 'en' -and $tb) { $script:tDesc.AddValueChanged($tb, $script:tHandler) } }
 function Save-Cfg {
     if (-not (Test-Path $bkDir)) { New-Item $bkDir -ItemType Directory -Force | Out-Null }
     $script:cfg | ConvertTo-Json | Set-Content $script:cfgFile -Encoding UTF8
@@ -661,12 +696,14 @@ $xaml = @'
 </Window>
 '@
 $xaml = [regex]::Replace($xaml, '#[0-9A-Fa-f]{6}\b', { param($mm) Convert-ThemeColor $mm.Value })
+if ($script:lang -eq 'en') { $xaml = [regex]::Replace($xaml, '(Text|Content|ToolTip)="([^"]+)"', { param($mm) $mm.Groups[1].Value + '="' + (T $mm.Groups[2].Value) + '"' }) }
 $w = [Windows.Markup.XamlReader]::Parse($xaml)
 $LogBox = $w.FindName('LogBox'); $Bar = $w.FindName('Bar'); $Count = $w.FindName('Count')
 $Dash = $w.FindName('Dash'); $Title = $w.FindName('Title'); $Fx = $w.FindName('Fx')
 $DetailBox = $w.FindName('DetailBox'); $DetailText = $w.FindName('DetailText')
 $Folders = $w.FindName('Folders'); $FolderScroll = $w.FindName('FolderScroll'); $FolderView = $w.FindName('FolderView')
 $ViewScroll = $w.FindName('ViewScroll'); $ViewTitle = $w.FindName('ViewTitle')
+foreach ($nm in 'ViewTitle', 'DetailText', 'Count', 'UpdText') { Add-THook ($w.FindName($nm)) }
 $BtnBack = $w.FindName('BtnBack'); $BtnGrpAll = $w.FindName('BtnGrpAll'); $BtnGrpNone = $w.FindName('BtnGrpNone')
 $BtnRec = $w.FindName('BtnRec'); $BtnAll = $w.FindName('BtnAll'); $BtnNone = $w.FindName('BtnNone')
 $w.FindName('Logo').Source = $script:logoBmp
@@ -708,8 +745,8 @@ function Icon($emo, $size) {
     }
     $t = TB ([string]$emo) ([double]$size * 0.8) '#FFFFFF' $false; $t.FontFamily = 'Segoe UI Emoji'; $t
 }
-function TB($t, $s, $c, $b) { $x = New-Object Windows.Controls.TextBlock; $x.Text = $t; $x.FontSize = $s; $x.Foreground = (Br $c); if ($b) { $x.FontWeight = 'Bold' }; $x }
-function Say($m) { $LogBox.AppendText("$m`r`n"); $LogBox.ScrollToEnd(); $w.Dispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::Background) }
+function TB($t, $s, $c, $b) { $x = New-Object Windows.Controls.TextBlock; $x.Text = T $t; Add-THook $x; $x.FontSize = $s; $x.Foreground = (Br $c); if ($b) { $x.FontWeight = 'Bold' }; $x }
+function Say($m) { $LogBox.AppendText((T "$m") + "`r`n"); $LogBox.ScrollToEnd(); $w.Dispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::Background) }
 
 # ---------- Pictograme ----------
 function Get-Icon($t) {
@@ -1114,7 +1151,7 @@ foreach ($grp in ($tweaks | Group-Object { $_.G })) {
     foreach ($t in $grp.Group) {
         $c = New-Object Windows.Controls.CheckBox
         $c.Tag = $t; $c.Width = 198; $c.Height = 94; $c.Margin = '0,0,10,10'
-        if ($t.T) { $c.ToolTip = $t.T }
+        if ($t.T) { $c.ToolTip = T $t.T }
         $in = New-Object Windows.Controls.StackPanel
         $ic = Icon (Get-Icon $t) 30
         $tx = TB ($(if ($t.S) { "$star " }) + $t.L) 11.5 '#F3E6EA' $false; $tx.TextWrapping = 'Wrap'; $tx.Margin = '0,6,14,0'
@@ -1240,12 +1277,12 @@ function New-Row($title, $sub) {
     $t1 = TB $title 12 '#F3E6EA' $true; $t1.TextTrimming = 'CharacterEllipsis'; $t1.Margin = '0,0,14,0'
     $t2 = TB $sub 10 '#8A6A72' $false; $t2.TextTrimming = 'CharacterEllipsis'; $t2.Margin = '0,3,14,0'
     $sp.Children.Add($t1) | Out-Null; $sp.Children.Add($t2) | Out-Null
-    $cb.Content = $sp; $cb.ToolTip = $sub
+    $cb.Content = $sp; $cb.ToolTip = T $sub
     $cb
 }
 function New-PillBtn($text) {
     $b = New-Object Windows.Controls.Button
-    $b.Style = $w.FindResource('Pill'); $b.Content = $text; $b.Background = Br '#2A1219'
+    $b.Style = $w.FindResource('Pill'); $b.Content = T $text; $b.Background = Br '#2A1219'
     $b.BorderBrush = Br '#FF2E4D'; $b.BorderThickness = 1; $b.FontSize = 12; $b.Padding = '16,8'; $b.Margin = '0,0,0,12'
     $b.HorizontalAlignment = 'Left'
     $b
@@ -1815,7 +1852,7 @@ Add-BenchText 'TEST FPS IN JOC' 13 '#FF9F1C' $true '0,0,0,4' | Out-Null
 Add-BenchText 'Apasa PORNESTE, apoi in 10 secunde intra in joc (sau intr-un benchmark gratuit, de ex. Unigine Superposition) si joaca normal. Masurarea se face cu PresentMon de la Intel (fara injectare in joc, merge si cu anti-cheat). La prima folosire se descarca PresentMon (aprox. 1 MB) de pe GitHub-ul Intel si i se verifica semnatura SHA256.' 11 '#FF7A93' $false '0,0,0,8' | Out-Null
 $fpsRow = New-Object Windows.Controls.StackPanel; $fpsRow.Orientation = 'Horizontal'; $fpsRow.Margin = '0,0,0,8'
 $durBox = New-Object Windows.Controls.ComboBox; $durBox.Width = 110; $durBox.Margin = '0,0,10,0'; $durBox.VerticalContentAlignment = 'Center'
-foreach ($d in '30 secunde', '60 secunde', '120 secunde') { [void]$durBox.Items.Add($d) }; $durBox.SelectedIndex = 1
+foreach ($d in '30 secunde', '60 secunde', '120 secunde') { [void]$durBox.Items.Add((T $d)) }; $durBox.SelectedIndex = 1
 $btnFps = New-PillBtn 'PORNESTE TEST FPS'; $btnFps.Margin = '0'
 $fpsRow.Children.Add($durBox) | Out-Null; $fpsRow.Children.Add($btnFps) | Out-Null
 $benchPanel.Children.Add($fpsRow) | Out-Null
@@ -2092,19 +2129,20 @@ $script:cardXaml = @'
 function Get-GainText($a, $b) { if (-not $a -or -not $b) { return '' }; $p = 100.0 * ($b - $a) / $a; '{0}{1:N0}%' -f $(if ($p -ge 0) { '+' } else { '' }), $p }
 function New-ShareCard($app, $before, $after) {
     $xx = [regex]::Replace($script:cardXaml, '#[0-9A-Fa-f]{6}\b', { param($mm) Convert-ThemeColor $mm.Value })
+    if ($script:lang -eq 'en') { $xx = $xx.Replace('Test FPS', 'FPS test') }
     $c = [Windows.Markup.XamlReader]::Parse($xx)
     $c.FindName('CLogo').Source = $script:logoBmp
     $c.FindName('CGame').Text = $(if ($app) { ($app -replace '\.exe$', '') } else { 'Test FPS' })
     if ($before -and $after) {
         $c.FindName('CBig').Text = ('{0:N0}  ' -f $before.Avg) + [char]0x2192 + ('  {0:N0} FPS' -f $after.Avg)
         $g = Get-GainText $before.Avg $after.Avg
-        $c.FindName('CGain').Text = "$g FPS mediu dupa optimizare"
+        $c.FindName('CGain').Text = T "$g FPS mediu dupa optimizare"
         if ($after.Avg -lt $before.Avg) { $c.FindName('CGain').Foreground = Br '#FF9F1C' }
         $c.FindName('CLows').Text = ('1% low: {0:N0} ' -f $before.Low1) + [char]0x2192 + (' {0:N0} ({1})      0.1% low: {2:N0} ' -f $after.Low1, (Get-GainText $before.Low1 $after.Low1), $before.Low01) + [char]0x2192 + (' {0:N0} ({1})' -f $after.Low01, (Get-GainText $before.Low01 $after.Low01))
     } else {
         $x = $(if ($after) { $after } else { $before })
         $c.FindName('CBig').Text = ('{0:N0} FPS' -f $x.Avg)
-        $c.FindName('CGain').Text = 'FPS mediu'
+        $c.FindName('CGain').Text = T 'FPS mediu'
         $c.FindName('CLows').Text = ('1% low: {0:N0}      0.1% low: {1:N0}' -f $x.Low1, $x.Low01)
     }
     $gpuN = (@($gpuMain | ForEach-Object { $_.Name }) | Select-Object -First 1)
@@ -2161,7 +2199,7 @@ function Update-ProofPanel {
     Add-ProofStep 1 'Test FPS inainte de optimizare' $(if ($b) { ('{0}: {1:N0} FPS mediu, 1% low {2:N0}' -f $script:proof.App, $b.Avg, $b.Low1) } else { 'Porneste testul, intra in joc in 10 secunde si joaca normal.' }) $s1 'PORNESTE TESTUL' { Start-ProofTest }
     Add-ProofStep 2 'Optimizeaza' 'Alege optimizarile (sau lasa-le pe cele cu steluta) si apasa OPTIMIZEAZA. Pasul se bifeaza singur.' $s2 'MERGI LA OPTIMIZARI' { Close-Group }
     Add-ProofStep 3 'Reporneste PC-ul' 'Unele optimizari se aplica abia dupa restart. Dupa repornire deschide aplicatia: pasul se bifeaza singur.' $s3 'REPORNESTE ACUM' {
-        $r = [Windows.MessageBox]::Show('Repornesc PC-ul acum? Salveaza-ti munca inainte.', '5AM Optimizer', 'YesNo', 'Question')
+        $r = [Windows.MessageBox]::Show((T 'Repornesc PC-ul acum? Salveaza-ti munca inainte.'), '5AM Optimizer', 'YesNo', 'Question')
         if ($r -eq 'Yes') { Restart-Computer -Force } }
     Add-ProofStep 4 'Test FPS dupa optimizare' $(if ($script:proof.After) { ('{0:N0} FPS mediu, 1% low {1:N0}' -f $script:proof.After.Avg, $script:proof.After.Low1) } else { "Acelasi joc ($($script:proof.App)), acelasi loc si aceleasi setari." }) $s4 'PORNESTE TESTUL' { Start-ProofTest }
     if ($st -eq 'optimized') { $sk = TB 'Nu vrei restart? Poti testa si acum, dar unele optimizari nu vor fi inca active.' 11 '#8A6A72' $false; $sk.Margin = '4,0,0,6'; $sk.TextWrapping = 'Wrap'; $sk.Cursor = [Windows.Input.Cursors]::Hand
@@ -2308,16 +2346,16 @@ function Enable-Tray {
     }
     $ni.Text = "5AM Optimizer v$AppVersion"
     $menu = New-Object System.Windows.Forms.ContextMenuStrip
-    $mi = $menu.Items.Add('Deschide 5AM Optimizer'); $mi.Font = New-Object System.Drawing.Font($mi.Font, [System.Drawing.FontStyle]::Bold); $mi.Add_Click({ Show-Main })
-    $script:miGm = New-Object System.Windows.Forms.ToolStripMenuItem 'Mod joc activ'
+    $mi = $menu.Items.Add((T 'Deschide 5AM Optimizer')); $mi.Font = New-Object System.Drawing.Font($mi.Font, [System.Drawing.FontStyle]::Bold); $mi.Add_Click({ Show-Main })
+    $script:miGm = New-Object System.Windows.Forms.ToolStripMenuItem (T 'Mod joc activ')
     $script:miGm.CheckOnClick = $true; $script:miGm.Checked = [bool]$script:gm.On
     $script:miGm.Add_Click({ $script:gm.On = $script:miGm.Checked; $gmOn.IsChecked = $script:gm.On; Save-Gm; Update-GmBadge
                              Say ("Mod joc: " + $(if ($script:gm.On) { 'ACTIV' } else { 'oprit' })) })
     [void]$menu.Items.Add($script:miGm)
-    $mi = $menu.Items.Add('Test FPS in joc'); $mi.Add_Click({ Show-Main; Open-Group $benchG })
-    $mi = $menu.Items.Add('Scor 5AM si sfaturi'); $mi.Add_Click({ Show-Main; Close-Group; $script:selKey = 'SCOR'; Update-Score; Show-Detail })
+    $mi = $menu.Items.Add((T 'Test FPS in joc')); $mi.Add_Click({ Show-Main; Open-Group $benchG })
+    $mi = $menu.Items.Add((T 'Scor 5AM si sfaturi')); $mi.Add_Click({ Show-Main; Close-Group; $script:selKey = 'SCOR'; Update-Score; Show-Detail })
     [void]$menu.Items.Add('-')
-    $mi = $menu.Items.Add('Iesire'); $mi.Add_Click({ Exit-App })
+    $mi = $menu.Items.Add((T 'Iesire')); $mi.Add_Click({ Exit-App })
     $ni.ContextMenuStrip = $menu
     $ni.Add_MouseClick({ if ($_.Button -eq [System.Windows.Forms.MouseButtons]::Left) { Show-Main } })
     $ni.Visible = $true
@@ -2359,7 +2397,7 @@ foreach ($tk in $script:themes.Keys) {
     foreach ($hx in '#FF2E4D', '#FF7A93', '#FFB7C5') {
         $el = New-Object Windows.Shapes.Ellipse; $el.Width = 16; $el.Height = 16; $el.Margin = '0,0,4,0'; $el.Fill = $bc.ConvertFromString((Convert-Hue $hx $th.H)); $row.Children.Add($el) | Out-Null }
     $col2 = New-Object Windows.Controls.StackPanel; $col2.Children.Add($row) | Out-Null
-    $nmT = New-Object Windows.Controls.TextBlock; $nmT.Text = $th.N + $(if ($tk -eq $script:cfg.Theme) { '  (activa)' } else { '' }); $nmT.FontWeight = 'Bold'; $nmT.FontSize = 12
+    $nmT = New-Object Windows.Controls.TextBlock; $nmT.Text = $th.N + $(if ($tk -eq $script:cfg.Theme) { (T '  (activa)') } else { '' }); $nmT.FontWeight = 'Bold'; $nmT.FontSize = 12
     $nmT.Foreground = $bc.ConvertFromString((Convert-Hue '#FFE4EA' $th.H)); $nmT.Margin = '0,6,0,0'; $col2.Children.Add($nmT) | Out-Null
     $bd.Child = $col2
     $bd.Add_MouseLeftButtonUp({
@@ -2373,8 +2411,28 @@ foreach ($tk in $script:themes.Keys) {
     $thWrap.Children.Add($bd) | Out-Null; $script:thBtns += $bd
 }
 $setPanel.Children.Add($thWrap) | Out-Null
-$thRestart = New-PillBtn 'REPORNESTE APLICATIA CA SA APLICI TEMA'; $thRestart.Visibility = 'Collapsed'
+$thRestart = New-PillBtn 'REPORNESTE APLICATIA CA SA APLICI SCHIMBARILE'; $thRestart.Visibility = 'Collapsed'
 $thRestart.Add_Click({ Restart-App })
+$lt = TB 'LIMBA' 12 '#FF9F1C' $true; $lt.Margin = '0,4,0,8'; $setPanel.Children.Add($lt) | Out-Null
+$lgWrap = New-Object Windows.Controls.WrapPanel; $lgWrap.Margin = '0,0,0,6'; $script:lgBtns = @()
+foreach ($lg in @(@{ K = 'ro'; N = 'Romana'; F = 'RO' }, @{ K = 'en'; N = 'English'; F = 'EN' })) {
+    $bd = New-Object Windows.Controls.Border; $bd.Width = 150; $bd.Height = 52; $bd.Margin = '0,0,10,10'; $bd.CornerRadius = 12; $bd.Padding = '12,8'
+    $bd.BorderThickness = 2; $bd.Cursor = [Windows.Input.Cursors]::Hand; $bd.Tag = $lg.K; $bd.Background = Br '#120609'
+    $bd.BorderBrush = Br $(if ($lg.K -eq $script:cfg.Lang) { '#FF2E4D' } else { '#34101A' })
+    $rw = New-Object Windows.Controls.StackPanel; $rw.Orientation = 'Horizontal'; $rw.VerticalAlignment = 'Center'
+    $fl = New-Object Windows.Controls.TextBlock; $fl.Text = $lg.F; $fl.FontWeight = 'Black'; $fl.FontSize = 18; $fl.Foreground = Br '#FF2E4D'; $fl.Margin = '0,0,10,0'
+    $ln = New-Object Windows.Controls.TextBlock; $ln.Text = $lg.N; $ln.FontWeight = 'Bold'; $ln.FontSize = 13; $ln.Foreground = Br '#FFE4EA'; $ln.VerticalAlignment = 'Center'
+    $rw.Children.Add($fl) | Out-Null; $rw.Children.Add($ln) | Out-Null; $bd.Child = $rw
+    $bd.Add_MouseLeftButtonUp({
+        $k = $args[0].Tag; if ($k -eq $script:cfg.Lang) { return }
+        $script:cfg.Lang = $k; Save-Cfg
+        foreach ($b2 in $script:lgBtns) { $b2.BorderBrush = Br $(if ($b2.Tag -eq $k) { '#FF2E4D' } else { '#34101A' }) }
+        $thRestart.Visibility = 'Visible'
+        Say $(if ($k -eq 'en') { 'The language changes after restarting the app.' } else { 'Limba se schimba dupa repornirea aplicatiei.' })
+    })
+    $lgWrap.Children.Add($bd) | Out-Null; $script:lgBtns += $bd
+}
+$setPanel.Children.Add($lgWrap) | Out-Null
 $setPanel.Children.Add($thRestart) | Out-Null
 $ot = TB 'COMPORTAMENT' 12 '#FF9F1C' $true; $ot.Margin = '0,8,0,8'; $setPanel.Children.Add($ot) | Out-Null
 $optWrap = New-Object Windows.Controls.WrapPanel
@@ -2410,7 +2468,7 @@ $w.Add_Closing({
     if ($script:cfg.Tray -and $script:ni -and -not $script:reallyExit) {
         $e.Cancel = $true; $w.Hide()
         if (-not $script:trayTold) { $script:trayTold = $true
-            try { $script:ni.ShowBalloonTip(4000, '5AM Optimizer', 'Ruleaza in continuare langa ceas. Mod joc ramane activ. Click dreapta pe iconita pentru meniu si Iesire.', [System.Windows.Forms.ToolTipIcon]::Info) } catch {} }
+            try { $script:ni.ShowBalloonTip(4000, '5AM Optimizer', (T 'Ruleaza in continuare langa ceas. Mod joc ramane activ. Click dreapta pe iconita pentru meniu si Iesire.'), [System.Windows.Forms.ToolTipIcon]::Info) } catch {} }
     }
 })
 $w.Add_Closed({ try { if ($script:ni) { $script:ni.Visible = $false; $script:ni.Dispose() } } catch {}; $w.Dispatcher.InvokeShutdown() })
@@ -2666,10 +2724,10 @@ $flagFile = "$bkDir\updated.flag"
 $script:upd = $null; $script:updState = 'idle'
 
 function Show-Banner($text, $kind, $btnText) {
-    $bt.Text = $text
+    $bt.Text = T $text
     $col = @{ ok = '#4ADE80'; info = '#FF2E4D'; err = '#FFB020' }[$kind]
     $bnr.BorderBrush = Br $col
-    if ($btnText) { $bb.Content = $btnText; $bb.Visibility = 'Visible' } else { $bb.Visibility = 'Collapsed' }
+    if ($btnText) { $bb.Content = T $btnText; $bb.Visibility = 'Visible' } else { $bb.Visibility = 'Collapsed' }
     $bnr.Visibility = 'Visible'
 }
 function New-UpdateCmd($new, $target, $noStart) {
@@ -2820,6 +2878,13 @@ if ($SelfTest) {
         Set-ScoreArc 73; Set-ScoreArc 100; Set-ScoreArc 0
         1..50 | ForEach-Object { Push-Spark 'CPU' ($_ * 2) }
         if ($script:themes.Count -ne 4) { $errs += 'teme' }
+        $lg0 = $script:lang; $script:lang = 'en'
+        if (-not $script:trRx) { Import-LangPack $script:langPack }
+        if ($script:trExact.Count -lt 250) { $errs += "traducere: doar $($script:trExact.Count) texte" }
+        if ((T 'OPTIMIZEAZA') -ne 'OPTIMIZE') { $errs += 'traducere exacta' }
+        $tm1 = T 'Masor... 12 s ramase (joaca normal)'; if ($tm1 -ne 'Measuring... 12 s left (play normally)') { $errs += "traducere fragmente: $tm1" }
+        $tb1 = TB 'x' 12 '#FFFFFF' $false; $tb1.Text = 'Totul OK'; if ($tb1.Text -ne 'All good') { $errs += "traducere automata TextBlock: $($tb1.Text)" }
+        $script:lang = $lg0
         $cd = New-ShareCard 'FiveM_GTAProcess.exe' @{ Avg = 128; Low1 = 90; Low01 = 60 } @{ Avg = 147.3; Low1 = 110; Low01 = 75 }
         if ($cd.PixelWidth -ne 1200) { $errs += 'card' }
         $cf = Save-Card $cd 'selftest'; if (-not (Test-Path $cf) -or (Get-Item $cf).Length -lt 20000) { $errs += 'card PNG' }; Remove-Item $cf -Force -ErrorAction SilentlyContinue

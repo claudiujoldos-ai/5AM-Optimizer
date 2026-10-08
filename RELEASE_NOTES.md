@@ -1,4 +1,3 @@
-5AM Optimizer v1.5.0
-- DOVADA 5AM: test FPS inainte, optimizare, restart, test dupa, cu fiecare pas bifat automat
-- Card de impartasit (imagine 1200x630 cu logo): "128 -> 147 FPS (+15%)", salvat in Imagini sau copiat pentru Discord (Ctrl+V)
-- Card si pentru orice test FPS din BENCHMARK
+5AM Optimizer v1.6.0
+- English language: switch between Romana and English in APP SETTINGS (Windows in another language starts in English automatically)
+- Limba engleza: comutator Romana / English in SETARI APLICATIE
