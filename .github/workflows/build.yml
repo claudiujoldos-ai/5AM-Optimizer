@@ -55,6 +55,19 @@ jobs:
           "version=$ver" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
           "publish=$($publish.ToString().ToLower())" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
 
+      - name: Incorporeaza iconitele 3D
+        shell: powershell
+        run: |
+          $files = @(Get-ChildItem .\assets\icons\*.png)
+          if ($files.Count -lt 60) { throw "Prea putine iconite in assets\icons: $($files.Count)" }
+          $lines = foreach ($f in $files) { "    '$($f.BaseName)' = '$([Convert]::ToBase64String([IO.File]::ReadAllBytes($f.FullName)))'" }
+          $src = @(Get-Content .\5AMOptimizer.ps1)
+          $i = [array]::IndexOf($src, '$script:iconPack = @{}')
+          if ($i -lt 1) { throw 'Nu gasesc linia $script:iconPack in script' }
+          $new = @($src[0..($i - 1)]) + '$script:iconPack = @{' + @($lines) + '}' + @($src[($i + 1)..($src.Count - 1)])
+          Set-Content .\5AMOptimizer.ps1 $new -Encoding UTF8
+          "Iconite incorporate: $($files.Count)"
+
       - name: Auto-test (script)
         shell: powershell
         run: |

@@ -18,12 +18,21 @@ Aplicatie cu interfata grafica (WPF) pentru Windows 11 care dezactiveaza functii
 - **Securitate (optional)**: Memory Integrity, VBS, excluderi Windows Defender pentru folderele cu jocuri
 - **Curatare aplicatii**: sterge aplicatii preinstalate (Teams, Bing News, Solitaire, OneDrive etc.)
 
+### Interfata
+
+- **Scor 5AM** (0-100) in antet: cat de pregatit e PC-ul pentru jocuri; apasa pe el pentru lista cu ce ai bun si ce mai poti imbunatati
+- **Grafice live** pentru CPU, placa video si RAM
+- **Iconite 3D** ([Microsoft Fluent Emoji](https://github.com/microsoft/fluentui-emoji), licenta MIT) si logo-urile reale ale aplicatiilor instalate
+- **Teme**: Sakura, Midnight, Neon, Violet
+- **Langa ceas**: aplicatia poate ramane in fundal (Mod joc continua sa lucreze) si poate porni odata cu Windows
+
 ### Foldere speciale
 
 - **Manager pornire**: alegi ce porneste odata cu Windows (ca in Task Manager)
 - **GPU pentru jocuri**: pui jocurile pe placa video dedicata (Performanta inalta)
 - **Mod joc**: cand pornesti un joc inchide aplicatiile alese si le redeschide dupa; optional timer 0.5 ms, curatarea memoriei standby (ca ISLC) si prioritate mare pentru joc
 - **AMD Radeon Adrenalin** / **NVIDIA GeForce**: setarile recomandate in driver, apar dupa placa ta video
+- **Setari aplicatie**: tema, petale de cires, langa ceas, pornire cu Windows
 - **Comparatie inainte / dupa**: dupa restart vezi timpul de pornire, RAM, procese, programe la pornire
 
 ### Benchmark si bottleneck

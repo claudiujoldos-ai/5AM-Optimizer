@@ -1,9 +1,9 @@
 # 5AM Optimizer - Gaming Edition (WPF, Windows 11)
 # Fara diacritice in fisier, ca sa mearga corect in Windows PowerShell 5.1
-param([switch]$SelfTest)
+param([switch]$SelfTest, [switch]$Tray)
 
 # Versiunea se suprascrie automat din tag-ul GitHub la build (v1.2.3 -> 1.2.3). Nu o muta de pe linia asta.
-$AppVersion = '1.3.2'
+$AppVersion = '1.4.0'
 # Repo-ul GitHub de unde se descarca actualizarile (owner/repo)
 $UpdateRepo = 'claudiujoldos-ai/5AM-Optimizer'
 
@@ -15,6 +15,15 @@ if (-not $isAdmin -and -not $SelfTest) {
     if ($PSCommandPath) { Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`"" }
     else { [Windows.MessageBox]::Show('Ruleaza aplicatia ca Administrator.') | Out-Null }
     exit
+}
+
+# ---------- O singura instanta: a doua pornire doar aduce fereastra existenta in fata ----------
+$script:showEvt = $null
+if (-not $SelfTest) {
+    $script:appMutex = New-Object Threading.Mutex($false, 'Local\5AMOptimizerApp')
+    $script:showEvt = New-Object Threading.EventWaitHandle($false, [Threading.EventResetMode]::AutoReset, 'Local\5AMOptimizerShow')
+    $owned = $false; try { $owned = $script:appMutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $owned = $true }
+    if (-not $owned) { [void]$script:showEvt.Set(); exit }
 }
 
 # ---------- Splash cu logo (se inchide cand e gata interfata) ----------
@@ -33,6 +42,49 @@ $script:splashT0 = Get-Date
 
 # ---------- Backup registry (Undo) ----------
 $bkDir = "$env:APPDATA\WinGameOptimizer"; $bkFile = "$bkDir\backup.json"
+
+# ---------- Setari aplicatie (tema, petale, langa ceas) ----------
+$script:cfgFile = "$bkDir\settings.json"
+$script:cfg = @{ Theme = 'sakura'; Petals = $true; Tray = $false }
+try { if (Test-Path $script:cfgFile) { $j = Get-Content $script:cfgFile -Raw | ConvertFrom-Json
+      foreach ($pn in 'Theme', 'Petals', 'Tray') { if ($null -ne $j.$pn) { $script:cfg[$pn] = $j.$pn } } } } catch {}
+function Save-Cfg {
+    if (-not (Test-Path $bkDir)) { New-Item $bkDir -ItemType Directory -Force | Out-Null }
+    $script:cfg | ConvertTo-Json | Set-Content $script:cfgFile -Encoding UTF8
+}
+$script:selfExe = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+$script:isExe = $script:selfExe -notmatch '(?i)\\(powershell|pwsh)(_ise)?\.exe$'
+
+# Teme: aceleasi culori, rotite pe roata culorilor (logo-ul ramane neschimbat)
+$script:themes = [ordered]@{
+    sakura   = @{ N = 'Sakura';   H = 0 }
+    midnight = @{ N = 'Midnight'; H = -135 }
+    neon     = @{ N = 'Neon';     H = 160 }
+    violet   = @{ N = 'Violet';   H = -75 } }
+if (-not $script:themes.Contains([string]$script:cfg.Theme)) { $script:cfg.Theme = 'sakura' }
+# culori cu inteles fix (verde = bine, rosu = problema, portocaliu = atentie) nu se schimba cu tema
+$script:keepCols = @('#4ADE80', '#FFB020', '#FF9F1C', '#FF3B30', '#FFFFFF', '#000000')
+$script:themeCache = @{}
+function Convert-Hue([string]$hex, [double]$shift) {
+    if (-not $shift -or $hex -notmatch '^#[0-9A-Fa-f]{6}$') { return $hex }
+    $k = $hex.ToUpper(); if ($script:keepCols -contains $k) { return $hex }
+    $r = [Convert]::ToInt32($k.Substring(1, 2), 16) / 255.0; $g = [Convert]::ToInt32($k.Substring(3, 2), 16) / 255.0; $b = [Convert]::ToInt32($k.Substring(5, 2), 16) / 255.0
+    $mx = [math]::Max($r, [math]::Max($g, $b)); $mn = [math]::Min($r, [math]::Min($g, $b)); $l = ($mx + $mn) / 2; $d = $mx - $mn
+    if ($d -lt 0.0001) { return $hex }
+    $sat = $(if ($l -gt 0.5) { $d / (2 - $mx - $mn) } else { $d / ($mx + $mn) })
+    $h = $(if ($mx -eq $r) { (($g - $b) / $d) } elseif ($mx -eq $g) { ($b - $r) / $d + 2 } else { ($r - $g) / $d + 4 }) * 60 + $shift
+    $h = $h % 360; if ($h -lt 0) { $h += 360 }
+    $c = (1 - [math]::Abs(2 * $l - 1)) * $sat; $x = $c * (1 - [math]::Abs((($h / 60) % 2) - 1)); $m = $l - $c / 2
+    switch ([int][math]::Floor($h / 60)) { 0 { $rr = $c; $gg = $x; $bb = 0 } 1 { $rr = $x; $gg = $c; $bb = 0 } 2 { $rr = 0; $gg = $c; $bb = $x }
+                                           3 { $rr = 0; $gg = $x; $bb = $c } 4 { $rr = $x; $gg = 0; $bb = $c } default { $rr = $c; $gg = 0; $bb = $x } }
+    '#{0:X2}{1:X2}{2:X2}' -f [int][math]::Round(($rr + $m) * 255), [int][math]::Round(($gg + $m) * 255), [int][math]::Round(($bb + $m) * 255)
+}
+function Convert-ThemeColor([string]$hex) {
+    $sh = $script:themes[[string]$script:cfg.Theme].H
+    if (-not $sh) { return $hex }
+    $k = $hex.ToUpper(); if ($script:themeCache.ContainsKey($k)) { return $script:themeCache[$k] }
+    $o = Convert-Hue $hex $sh; $script:themeCache[$k] = $o; $o
+}
 $script:bk = @{}
 # Citeste o lista dintr-un fisier JSON. Windows PowerShell 5.1 intoarce o lista JSON ca un singur obiect,
 # iar @(...) o impacheta inca o data; aici lista e desfacuta corect (si reparata daca fisierul are liste imbricate).
@@ -528,7 +580,17 @@ $xaml = @'
       </Grid.RowDefinitions>
 
       <Grid Margin="0,0,0,12">
-        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <Grid x:Name="ScoreBox" Grid.Column="2" Width="112" Height="112" Cursor="Hand" Background="Transparent" ToolTip="Scor 5AM: apasa ca sa vezi ce mai poti imbunatati">
+          <Ellipse Stroke="#2A0812" StrokeThickness="10"/>
+          <Path x:Name="ScoreArc" Stroke="#FF2E4D" StrokeThickness="10" StrokeStartLineCap="Round" StrokeEndLineCap="Round">
+            <Path.Effect><DropShadowEffect Color="#FF2E4D" BlurRadius="16" ShadowDepth="0" Opacity="0.85"/></Path.Effect>
+          </Path>
+          <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+            <TextBlock x:Name="ScoreNum" Text="--" FontSize="32" FontWeight="Black" Foreground="#FFE4EA" HorizontalAlignment="Center"/>
+            <TextBlock Text="SCOR 5AM" FontSize="9.5" FontWeight="Bold" Foreground="#FF7A93" HorizontalAlignment="Center"/>
+          </StackPanel>
+        </Grid>
         <StackPanel Grid.Column="1" VerticalAlignment="Center">
           <TextBlock x:Name="Title" Text="5AM OPTIMIZER" FontSize="38" FontWeight="Black" Foreground="#FFE4EA" HorizontalAlignment="Left">
             <TextBlock.Effect><DropShadowEffect Color="#FF2E4D" BlurRadius="24" ShadowDepth="0" Opacity="0.95"/></TextBlock.Effect>
@@ -598,6 +660,7 @@ $xaml = @'
   </Grid>
 </Window>
 '@
+$xaml = [regex]::Replace($xaml, '#[0-9A-Fa-f]{6}\b', { param($mm) Convert-ThemeColor $mm.Value })
 $w = [Windows.Markup.XamlReader]::Parse($xaml)
 $LogBox = $w.FindName('LogBox'); $Bar = $w.FindName('Bar'); $Count = $w.FindName('Count')
 $Dash = $w.FindName('Dash'); $Title = $w.FindName('Title'); $Fx = $w.FindName('Fx')
@@ -610,8 +673,41 @@ $w.FindName('Logo').Source = $script:logoBmp
 $BtnApply = $w.FindName('BtnApply'); $BtnRevert = $w.FindName('BtnRevert')
 $w.FindName('Sub').Text = "AI OFF  |  MAX PERFORMANCE  |  GAMING EDITION  |  v$AppVersion"
 $bc = New-Object Windows.Media.BrushConverter
-function Br($h) { $bc.ConvertFromString($h) }
+function Br($h) { $bc.ConvertFromString((Convert-ThemeColor $h)) }
 function Emo($c) { [char]::ConvertFromUtf32($c) }
+
+# ---------- Iconite 3D (Microsoft Fluent Emoji, licenta MIT) ----------
+# @@ICONPACK@@ build-ul de pe GitHub inlocuieste linia urmatoare cu iconitele din assets\icons incorporate in exe
+$script:iconPack = @{}
+$script:iconCache = @{}
+function New-Bitmap($bytes) {
+    $b = New-Object Windows.Media.Imaging.BitmapImage
+    $b.BeginInit(); $b.StreamSource = New-Object IO.MemoryStream (, $bytes); $b.CacheOption = 'OnLoad'; $b.EndInit(); $b.Freeze(); $b
+}
+function Get-IconBitmap($cp) {
+    if ($script:iconCache.ContainsKey($cp)) { return $script:iconCache[$cp] }
+    $bmp = $null
+    try {
+        if ($script:iconPack[$cp]) { $bmp = New-Bitmap ([Convert]::FromBase64String($script:iconPack[$cp])) }
+        elseif ($PSCommandPath) {
+            $f = Join-Path (Split-Path $PSCommandPath) "assets\icons\$cp.png"
+            if (Test-Path -LiteralPath $f) { $bmp = New-Bitmap ([IO.File]::ReadAllBytes($f)) }
+        }
+    } catch { $bmp = $null }
+    $script:iconCache[$cp] = $bmp; $bmp
+}
+# Imagine 3D daca exista, altfel emoji-ul obisnuit
+function Icon($emo, $size) {
+    $cp = ''; try { $cp = '{0:x}' -f [char]::ConvertToUtf32([string]$emo, 0) } catch {}
+    $bmp = $(if ($cp) { Get-IconBitmap $cp })
+    if ($bmp) {
+        $im = New-Object Windows.Controls.Image; $im.Source = $bmp; $im.Width = $size; $im.Height = $size; $im.HorizontalAlignment = 'Left'
+        [Windows.Media.RenderOptions]::SetBitmapScalingMode($im, [Windows.Media.BitmapScalingMode]::HighQuality)
+        $im.Effect = New-Object Windows.Media.Effects.DropShadowEffect -Property @{ Color = [Windows.Media.Color]::FromRgb(0, 0, 0); BlurRadius = 10; ShadowDepth = 3; Opacity = 0.55 }
+        return $im
+    }
+    $t = TB ([string]$emo) ([double]$size * 0.8) '#FFFFFF' $false; $t.FontFamily = 'Segoe UI Emoji'; $t
+}
 function TB($t, $s, $c, $b) { $x = New-Object Windows.Controls.TextBlock; $x.Text = $t; $x.FontSize = $s; $x.Foreground = (Br $c); if ($b) { $x.FontWeight = 'Bold' }; $x }
 function Say($m) { $LogBox.AppendText("$m`r`n"); $LogBox.ScrollToEnd(); $w.Dispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::Background) }
 
@@ -643,7 +739,7 @@ function Show-Detail {
         $DetailText.Text = $u.N + $(if ($u.L) { "`n`n" + $u.L } else { '' })
         $DetailBox.Visibility = 'Visible'
     }
-    foreach ($k in @($ui.Keys)) { $ui[$k].B.BorderBrush = Br $(if ($k -eq $script:selKey) { '#FF2E4D' } else { '#3A0F1A' }) }
+    foreach ($k in @($ui.Keys)) { if ($ui[$k].B -is [Windows.Controls.Border]) { $ui[$k].B.BorderBrush = Br $(if ($k -eq $script:selKey) { '#FF2E4D' } else { '#3A0F1A' }) } }
 }
 foreach ($k in 'CPU', 'GPU', 'RAM', 'DISCURI', 'ANALIZA', 'SFATURI') {
     $b = New-Object Windows.Controls.Border
@@ -652,9 +748,29 @@ foreach ($k in 'CPU', 'GPU', 'RAM', 'DISCURI', 'ANALIZA', 'SFATURI') {
     $sp = New-Object Windows.Controls.StackPanel
     $v = TB '...' 14 '#FFE4EA' $true; $v.Margin = '0,2,0,0'; $v.TextTrimming = 'CharacterEllipsis'
     $sp.Children.Add((TB $k 10.5 '#FF2E4D' $true)) | Out-Null; $sp.Children.Add($v) | Out-Null
+    $spk = $null
+    if ($k -in 'CPU', 'GPU', 'RAM') {
+        $cv = New-Object Windows.Controls.Canvas; $cv.Height = 22; $cv.Margin = '0,5,0,0'; $cv.ClipToBounds = $true
+        $ar = New-Object Windows.Shapes.Polygon; $ar.Opacity = 0.28
+        $ar.Fill = New-Object Windows.Media.LinearGradientBrush((Br '#FF2E4D').Color, [Windows.Media.Colors]::Transparent, 90)
+        $pl = New-Object Windows.Shapes.Polyline; $pl.Stroke = Br '#FF4D6D'; $pl.StrokeThickness = 1.6; $pl.StrokeLineJoin = 'Round'
+        $cv.Children.Add($ar) | Out-Null; $cv.Children.Add($pl) | Out-Null; $sp.Children.Add($cv) | Out-Null
+        $spk = @{ C = $cv; L = $pl; A = $ar; H = New-Object Collections.ArrayList }
+    }
     $b.Child = $sp; $Dash.Children.Add($b) | Out-Null
     $b.Add_MouseLeftButtonUp({ $kk = $args[0].Tag; $script:selKey = $(if ($script:selKey -eq $kk) { $null } else { $kk }); Show-Detail })
-    $ui[$k] = @{ B = $b; V = $v; N = ''; L = '' }
+    $ui[$k] = @{ B = $b; V = $v; N = ''; L = ''; Sp = $spk }
+}
+function Push-Spark($k, $val) {
+    $s = $ui[$k].Sp; if (-not $s -or $null -eq $val) { return }
+    [void]$s.H.Add([double][math]::Max(0, [math]::Min(100, $val))); while ($s.H.Count -gt 45) { $s.H.RemoveAt(0) }
+    $wd = $s.C.ActualWidth; $hh = 22; if ($wd -lt 10 -or $s.H.Count -lt 2) { return }
+    $step = $wd / 44; $n = $s.H.Count
+    $pts = New-Object Windows.Media.PointCollection
+    for ($i = 0; $i -lt $n; $i++) { $pts.Add((New-Object Windows.Point(($wd - ($n - 1 - $i) * $step), ($hh - 1 - $s.H[$i] / 100.0 * ($hh - 3))))) }
+    $s.L.Points = $pts
+    $ap = New-Object Windows.Media.PointCollection; foreach ($pt in $pts) { $ap.Add($pt) }
+    $ap.Add((New-Object Windows.Point($wd, $hh))); $ap.Add((New-Object Windows.Point(($wd - ($n - 1) * $step), $hh))); $s.A.Points = $ap
 }
 $cp = Get-CimInstance Win32_Processor | Select-Object -First 1
 $ui.CPU.N = "$($cp.Name.Trim())`n$($cp.NumberOfCores) nuclee / $($cp.NumberOfLogicalProcessors) thread-uri"
@@ -895,6 +1011,7 @@ function Update-Live {
     $ui.CPU.L = "Load $cpu%   Temp " + $(if ($null -ne $ct) { "$ct C" } else { 'n/a (porneste LibreHardwareMonitor)' })
     $ui.RAM.V.Text = ('{0:N1} / {1:N0} GB' -f $d['Use'], $d['Tot'])
     $ui.RAM.L = ('{0:N1} / {1:N1} GB folosit ({2}%)' -f $d['Use'], $d['Tot'], $rp)
+    Push-Spark 'CPU' $cpu; Push-Spark 'RAM' $rp; if ($g) { Push-Spark 'GPU' $g.Load }
     if ($g) {
         $ui.GPU.V.Text = "$($g.Load)%" + $(if ($null -ne $g.Temp) { "   $($g.Temp) C" } else { '' })
         $gtxt = if ($null -ne $g.Temp) { "$($g.Temp) C" } else { 'n/a (porneste LibreHardwareMonitor)' }
@@ -938,8 +1055,46 @@ function Update-Count {
         $g.Badge.Text = "$k / $($g.Checks.Count) active"; $g.Badge.Foreground = Br $(if ($k -gt 0) { '#FF6B86' } else { '#8A6A72' })
     }
 }
+# Logo-ul real al unei aplicatii din Microsoft Store (din manifestul ei)
+function Get-AppLogo($pkg) {
+    try {
+        [xml]$x = Get-Content -LiteralPath (Join-Path $pkg.InstallLocation 'AppxManifest.xml') -Raw -ErrorAction Stop
+        $rels = @()
+        foreach ($ap in @($x.Package.Applications.Application)) { if ($ap.VisualElements.Square44x44Logo) { $rels += $ap.VisualElements.Square44x44Logo } }
+        if ($x.Package.Properties.Logo) { $rels += $x.Package.Properties.Logo }
+        foreach ($rel in $rels) {
+            $dir = Join-Path $pkg.InstallLocation (Split-Path $rel); $base = [IO.Path]::GetFileNameWithoutExtension($rel)
+            $c = @(Get-ChildItem -LiteralPath $dir -Filter "$base*.png" -ErrorAction SilentlyContinue)
+            if (-not $c.Count) { continue }
+            $best = $null
+            foreach ($rx in 'targetsize-48_altform-unplated\.png$', 'targetsize-64_altform-unplated\.png$', 'targetsize-48\.png$', 'scale-200\.png$', 'scale-100\.png$') {
+                $best = $c | Where-Object { $_.Name -match $rx } | Select-Object -First 1; if ($best) { break } }
+            if (-not $best) { $best = $c | Sort-Object Length -Descending | Select-Object -First 1 }
+            return New-Bitmap ([IO.File]::ReadAllBytes($best.FullName))
+        }
+    } catch {}
+    $null
+}
+function Set-AppLogos($g) {
+    $script:logosDone = $true
+    $pk = @(); try { $pk = @(Get-AppxPackage -ErrorAction Stop) } catch {}
+    foreach ($c in $g.Checks) {
+        $t = $c.Tag; if (-not $t.K) { continue }
+        $hit = $null; foreach ($pat in $t.K) { $hit = $pk | Where-Object { $_.Name -like $pat -and $_.InstallLocation } | Select-Object -First 1; if ($hit) { break } }
+        $panel = $c.Content
+        if ($hit) {
+            $bmp = Get-AppLogo $hit
+            if ($bmp) { $im = New-Object Windows.Controls.Image; $im.Source = $bmp; $im.Width = 30; $im.Height = 30; $im.HorizontalAlignment = 'Left'
+                        [Windows.Media.RenderOptions]::SetBitmapScalingMode($im, [Windows.Media.BitmapScalingMode]::HighQuality)
+                        $panel.Children.RemoveAt(0); $panel.Children.Insert(0, $im) }
+        } else {
+            $c.Opacity = 0.55; $c.ToolTip = 'Nu e instalata pe acest PC (nu se schimba nimic daca o bifezi)'
+        }
+    }
+}
 function Open-Group($g) {
     $script:cur = $g
+    if ($g.Name -like 'CURATARE*' -and -not $script:logosDone) { try { Set-AppLogos $g } catch {} }
     $ViewTitle.Text = $g.Name.ToUpper(); $ViewTitle.Foreground = Br $g.Col
     $ViewScroll.Content = $g.Panel
     $bv = $(if ($g.NoBulk) { 'Collapsed' } else { 'Visible' }); $BtnGrpAll.Visibility = $bv; $BtnGrpNone.Visibility = $bv
@@ -961,7 +1116,7 @@ foreach ($grp in ($tweaks | Group-Object { $_.G })) {
         $c.Tag = $t; $c.Width = 198; $c.Height = 94; $c.Margin = '0,0,10,10'
         if ($t.T) { $c.ToolTip = $t.T }
         $in = New-Object Windows.Controls.StackPanel
-        $ic = TB (Get-Icon $t) 22 '#FFFFFF' $false; $ic.FontFamily = 'Segoe UI Emoji'
+        $ic = Icon (Get-Icon $t) 30
         $tx = TB ($(if ($t.S) { "$star " }) + $t.L) 11.5 '#F3E6EA' $false; $tx.TextWrapping = 'Wrap'; $tx.Margin = '0,6,14,0'
         $in.Children.Add($ic) | Out-Null; $in.Children.Add($tx) | Out-Null
         $c.Content = $in; $wp.Children.Add($c) | Out-Null; $script:checks += $c; $g.Checks += $c
@@ -972,7 +1127,7 @@ foreach ($grp in ($tweaks | Group-Object { $_.G })) {
     $tile.BorderThickness = 1; $tile.Background = Br '#120609'; $tile.BorderBrush = Br '#3A0F1A'; $tile.Cursor = [Windows.Input.Cursors]::Hand
     $tile.Tag = $g
     $sp = New-Object Windows.Controls.StackPanel
-    $fi = TB (Get-GroupIcon $grp.Name) 30 '#FFFFFF' $false; $fi.FontFamily = 'Segoe UI Emoji'
+    $fi = Icon (Get-GroupIcon $grp.Name) 42
     $short = $(if ($grp.Name -like 'CURATARE*') { 'CURATARE APLICATII' } else { $grp.Name })
     $nm = TB $short 12 $g.Col $true; $nm.TextWrapping = 'Wrap'; $nm.Margin = '0,6,0,2'
     $g.Badge = TB '' 11 '#8A6A72' $false
@@ -1053,7 +1208,7 @@ $stile.Width = 205; $stile.Height = 118; $stile.Margin = '0,0,12,12'; $stile.Cor
 $stile.BorderThickness = 1; $stile.Background = Br '#120609'; $stile.BorderBrush = Br '#3A0F1A'; $stile.Cursor = [Windows.Input.Cursors]::Hand
 $stile.Tag = $startG
 $ssp = New-Object Windows.Controls.StackPanel
-$sfi = TB (Emo 0x1F6A6) 30 '#FFFFFF' $false; $sfi.FontFamily = 'Segoe UI Emoji'
+$sfi = Icon (Emo 0x1F6A6) 42
 $snm = TB 'MANAGER PORNIRE' 12 '#FFC857' $true; $snm.Margin = '0,6,0,2'
 $ssp.Children.Add($sfi) | Out-Null; $ssp.Children.Add($snm) | Out-Null; $ssp.Children.Add($startG.Badge) | Out-Null
 $stile.Child = $ssp
@@ -1069,7 +1224,7 @@ function New-FolderTile($g, $icon, $title) {
     $t.BorderThickness = 1; $t.Background = Br '#120609'; $t.BorderBrush = Br '#3A0F1A'; $t.Cursor = [Windows.Input.Cursors]::Hand
     $t.Tag = $g
     $sp = New-Object Windows.Controls.StackPanel
-    $fi = TB $icon 30 '#FFFFFF' $false; $fi.FontFamily = 'Segoe UI Emoji'
+    $fi = Icon $icon 42
     $nm = TB $title 12 $g.Col $true; $nm.TextWrapping = 'Wrap'; $nm.Margin = '0,6,0,2'
     $sp.Children.Add($fi) | Out-Null; $sp.Children.Add($nm) | Out-Null; $sp.Children.Add($g.Badge) | Out-Null
     $t.Child = $sp
@@ -1177,6 +1332,7 @@ $gmOn = New-Row 'MOD JOC ACTIV' 'Bifat = urmareste jocurile si inchide aplicatii
 $gmOn.IsChecked = $script:gm.On
 $gmOn.Add_Click({
     $script:gm.On = [bool]$args[0].IsChecked; Save-Gm; Update-GmBadge
+    if ($script:miGm) { $script:miGm.Checked = $script:gm.On }
     Say ("Mod joc: " + $(if ($script:gm.On) { 'ACTIV' } else { 'oprit' }))
 })
 $gmWrap = New-Object Windows.Controls.WrapPanel
@@ -1632,7 +1788,7 @@ function Show-Bottleneck($b, $title) {
         $n = TB $r.N 12 '#F3E6EA' $true; $n.VerticalAlignment = 'Center'
         $pb = New-Object Windows.Controls.ProgressBar; $pb.Height = 14; $pb.Minimum = 0; $pb.Maximum = 100; $pb.BorderThickness = 0; $pb.Background = Br '#1F0A10'
         $a = $(if ($null -ne $r.A) { [double]$r.A } else { 0 }); $pb.Value = $a
-        $pb.Foreground = Br $(if ($a -ge 90) { '#FF2E4D' } elseif ($a -ge 70) { '#FF9F1C' } else { '#4ADE80' })
+        $pb.Foreground = Br $(if ($a -ge 90) { '#FF3B30' } elseif ($a -ge 70) { '#FF9F1C' } else { '#4ADE80' })
         [Windows.Controls.Grid]::SetColumn($pb, 1)
         $vt = $(if ($null -eq $r.A) { 'n/a' } else { 'medie {0:N0}%  max {1:N0}%' -f $r.A, $r.M }); if ($r.X) { $vt += "  ($($r.X))" }
         $v = TB $vt 11 '#FFB7C5' $false; $v.Margin = '10,0,0,0'; $v.VerticalAlignment = 'Center'; [Windows.Controls.Grid]::SetColumn($v, 2)
@@ -1640,7 +1796,7 @@ function Show-Bottleneck($b, $title) {
         $botPanel.Children.Add($gr) | Out-Null
     }
     $vb = New-Object Windows.Controls.Border; $vb.CornerRadius = 10; $vb.Padding = '12,9'; $vb.Margin = '0,6,0,0'; $vb.BorderThickness = 1
-    $vb.Background = Br '#1A060C'; $vb.BorderBrush = Br $(if ($b.Kind -eq 'CPU') { '#FF2E4D' } elseif ($b.Kind -eq 'GPU') { '#4ADE80' } else { '#FF9F1C' })
+    $vb.Background = Br '#1A060C'; $vb.BorderBrush = Br $(if ($b.Kind -eq 'CPU') { '#FF3B30' } elseif ($b.Kind -eq 'GPU') { '#4ADE80' } else { '#FF9F1C' })
     $vs = New-Object Windows.Controls.StackPanel
     $vt2 = TB $b.Verdict 12.5 '#FFE4EA' $true; $vt2.TextWrapping = 'Wrap'; $vs.Children.Add($vt2) | Out-Null
     foreach ($nn in $b.Notes) { $x = TB "- $nn" 11.5 '#FFB7C5' $false; $x.TextWrapping = 'Wrap'; $x.Margin = '0,5,0,0'; $vs.Children.Add($x) | Out-Null }
@@ -1790,7 +1946,7 @@ function Start-GpuStress {
     $gg = New-Object Windows.Controls.Grid; $gw.Content = $gg
     $script:gpuSt = [FiveAmGpu]::Build($gg, 220)
     $script:gpuLbl = TB 'TEST GPU' 20 '#FFE4EA' $true; $script:gpuLbl.Margin = '30,24,0,0'; $script:gpuLbl.HorizontalAlignment = 'Left'; $script:gpuLbl.VerticalAlignment = 'Top'
-    $script:gpuLbl.Effect = New-Object Windows.Media.Effects.DropShadowEffect -Property @{ Color = [Windows.Media.Color]::FromRgb(255, 46, 77); BlurRadius = 16; ShadowDepth = 0 }
+    $script:gpuLbl.Effect = New-Object Windows.Media.Effects.DropShadowEffect -Property @{ Color = (Br '#FF2E4D').Color; BlurRadius = 16; ShadowDepth = 0 }
     $gg.Children.Add($script:gpuLbl) | Out-Null
     $gw.Add_KeyDown({ if ($_.Key -eq 'Escape') { $script:bm.GpuCancel = $true } })
     $script:bm.GpuCancel = $false
@@ -1880,6 +2036,203 @@ $bmTimer.Add_Tick({
 
 New-FolderTile $benchG (Emo 0x1F3C1) 'BENCHMARK FPS SI STRES'
 New-FolderTile $botG (Emo 0x1F6A7) 'BOTTLENECK'
+
+# ---------- Scor 5AM (0-100): cat de bine e pregatit PC-ul pentru jocuri ----------
+$ScoreBox = $w.FindName('ScoreBox'); $ScoreArc = $w.FindName('ScoreArc'); $ScoreNum = $w.FindName('ScoreNum')
+$ui['SCOR'] = @{ B = $null; V = $null; N = ''; L = ''; Sp = $null }
+function Get-RegVal($path, $name) { try { (Get-ItemProperty -LiteralPath $path -Name $name -ErrorAction Stop).$name } catch { $null } }
+function Get-Score {
+    $items = New-Object Collections.ArrayList
+    $add = { param($ok, $pts, $txt, $part) [void]$items.Add(@{ Ok = $ok; P = $(if ($null -ne $part) { $part } elseif ($ok) { $pts } else { 0 }); M = $pts; T = $txt }) }
+    & $add ((Get-RegVal 'HKCU:\Software\Microsoft\GameBar' 'AutoGameModeEnabled') -ne 0) 6 'Game Mode pornit'
+    & $add ((Get-RegVal 'HKCU:\System\GameConfigStore' 'GameDVR_Enabled') -eq 0) 8 'Game DVR / inregistrare in fundal oprite'
+    & $add ((Get-RegVal 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' 'HwSchMode') -eq 2) 6 'GPU Scheduling hardware (HAGS) pornit'
+    $sch = ''; try { $sch = [string](powercfg /getactivescheme) } catch {}
+    & $add ($sch -and $sch -notmatch '381b4222-f694-41f0-9685-ff5bb260df2e|a1841308-3541-4fab-bc81-f71556f20b4a') 8 'Plan de energie pentru performanta (nu Balanced)'
+    & $add (((Get-RegVal 'HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot' 'TurnOffWindowsCopilot') -eq 1) -or ((Get-RegVal 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI' 'DisableAIDataAnalysis') -eq 1)) 8 'Copilot si functiile AI oprite'
+    & $add ((Get-RegVal 'HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo' 'Enabled') -eq 0) 5 'Fara ID de reclame si tracking'
+    & $add ((Get-RegVal 'HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications' 'GlobalUserDisabled') -eq 1) 6 'Aplicatii in fundal oprite'
+    & $add ([string](Get-RegVal 'HKCU:\Control Panel\Mouse' 'MouseSpeed') -eq '0') 4 'Mouse fara acceleratie'
+    & $add ((Get-RegVal 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' 'VisualFXSetting') -eq 2) 4 'Efecte vizuale reduse'
+    $st = @($script:startCbs | Where-Object { $_.IsChecked }).Count
+    & $add ($st -le 8) 10 "Programe la pornire: $st (ideal cel mult 8)" $(if ($st -le 8) { 10 } elseif ($st -le 15) { 5 } else { 0 })
+    $fr = $null; try { $v = Get-Volume -DriveLetter ([string]$env:SystemDrive)[0] -ErrorAction Stop; if ($v.Size) { $fr = 100.0 * $v.SizeRemaining / $v.Size } } catch {}
+    & $add ($null -eq $fr -or $fr -ge 15) 8 $(if ($null -ne $fr) { "Spatiu liber pe $($env:SystemDrive) {0:N0}% (ideal peste 15%)" -f $fr } else { 'Spatiu liber pe disc' })
+    $tp = @($script:sd['Tips'] | Where-Object { $_ }).Count
+    & $add ($tp -eq 0) 12 $(if ($tp) { "SFATURI: $tp lucruri de verificat" } else { 'SFATURI: totul in regula' }) ([math]::Max(0, 12 - 4 * $tp))
+    $rp = $null; if ($script:sd['Tot']) { $rp = 100.0 * $script:sd['Use'] / $script:sd['Tot'] }
+    & $add ($null -eq $rp -or $rp -lt 85) 5 $(if ($null -ne $rp) { "RAM folosit acum {0:N0}% (ideal sub 85%)" -f $rp } else { 'RAM folosit' })
+    $ct = $script:sd['Ct']; $gt = $(if ($script:sd['Gpu']) { $script:sd['Gpu'].Temp })
+    & $add (-not (($ct -ge 90) -or ($gt -ge 85))) 5 'Temperaturi bune (CPU sub 90 C, GPU sub 85 C)'
+    & $add ([bool]$script:gm.On) 5 'Mod joc activ'
+    $sum = 0; foreach ($i in $items) { $sum += $i.P }
+    @{ Score = [int][math]::Round($sum); Items = $items }
+}
+function Set-ScoreArc([double]$v) {
+    $v = [math]::Max(0, [math]::Min(100, $v)); $r = 51.0; $cx = 56.0; $cy = 56.0
+    if ($v -ge 99.9) { $ScoreArc.Data = New-Object Windows.Media.EllipseGeometry((New-Object Windows.Point($cx, $cy)), $r, $r); return }
+    if ($v -le 0.1) { $ScoreArc.Data = $null; return }
+    $a = 2 * [math]::PI * $v / 100.0
+    $fig = New-Object Windows.Media.PathFigure; $fig.StartPoint = New-Object Windows.Point($cx, ($cy - $r)); $fig.IsClosed = $false
+    $end = New-Object Windows.Point(($cx + $r * [math]::Sin($a)), ($cy - $r * [math]::Cos($a)))
+    $fig.Segments.Add((New-Object Windows.Media.ArcSegment($end, (New-Object Windows.Size($r, $r)), 0, ($v -gt 50), [Windows.Media.SweepDirection]::Clockwise, $true)))
+    $pg = New-Object Windows.Media.PathGeometry; $pg.Figures.Add($fig); $ScoreArc.Data = $pg
+}
+$script:scoreAnim = $null
+function Update-Score {
+    try {
+        $r = Get-Score; $sc = $r.Score
+        $col = $(if ($sc -ge 80) { '#4ADE80' } elseif ($sc -ge 55) { '#FF9F1C' } else { '#FF3B30' })
+        $ScoreArc.Stroke = Br $col; $ScoreArc.Effect.Color = (Br $col).Color
+        $ck = [string][char]0x2713; $xk = [string][char]0x2717
+        $lines = foreach ($i in ($r.Items | Sort-Object { $_.Ok })) { $(if ($i.Ok) { "$ck  $($i.T)" } else { "$xk  $($i.T)   (+$([int]($i.M - $i.P)) puncte posibile)" }) }
+        $ui.SCOR.N = "SCOR 5AM: $sc / 100`nCe ai bun si ce mai poti imbunatati:"; $ui.SCOR.L = ($lines -join "`n")
+        if ($script:selKey -eq 'SCOR') { Show-Detail }
+        # animatie: cifra si arcul urca pana la scorul nou
+        $from = $(if ($null -ne $script:scoreShown) { $script:scoreShown } else { 0 }); $script:scoreShown = $sc
+        $script:scoreAnim = @{ From = [double]$from; To = [double]$sc; T0 = Get-Date }
+        $scoreAT.Start()
+    } catch {}
+}
+$scoreAT = New-Object Windows.Threading.DispatcherTimer; $scoreAT.Interval = [TimeSpan]::FromMilliseconds(30)
+$scoreAT.Add_Tick({
+    $an = $script:scoreAnim; if (-not $an) { $scoreAT.Stop(); return }
+    $t = [math]::Min(1, ((Get-Date) - $an.T0).TotalMilliseconds / 900); $e = 1 - [math]::Pow(1 - $t, 3)
+    $v = $an.From + ($an.To - $an.From) * $e
+    Set-ScoreArc $v; $ScoreNum.Text = [string][int][math]::Round($v)
+    if ($t -ge 1) { $scoreAT.Stop() }
+})
+$ScoreBox.Add_MouseLeftButtonUp({ $script:selKey = $(if ($script:selKey -eq 'SCOR') { $null } else { 'SCOR' }); Show-Detail })
+$scoreT = New-Object Windows.Threading.DispatcherTimer; $scoreT.Interval = [TimeSpan]::FromSeconds(6)
+$scoreT.Add_Tick({ $scoreT.Interval = [TimeSpan]::FromSeconds(30); Update-Score })
+$scoreT.Start()
+
+# ---------- Langa ceas (tray) si pornire cu Windows ----------
+$script:ni = $null; $script:miGm = $null; $script:reallyExit = $false
+function Show-Main { $w.Show(); if ($w.WindowState -eq 'Minimized') { $w.WindowState = 'Normal' }; [void]$w.Activate(); $w.Topmost = $true; $w.Topmost = $false }
+function Exit-App {
+    $script:reallyExit = $true
+    try { if ($script:ni) { $script:ni.Visible = $false; $script:ni.Dispose(); $script:ni = $null } } catch {}
+    $w.Close()
+}
+function Enable-Tray {
+    if ($script:ni) { return }
+    Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+    $ni = New-Object System.Windows.Forms.NotifyIcon
+    try { if ($script:isExe) { $ni.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($script:selfExe) } } catch {}
+    if (-not $ni.Icon) {
+        $ms = New-Object IO.MemoryStream (, [Convert]::FromBase64String($script:logoB64))
+        $bm = New-Object System.Drawing.Bitmap $ms; $sm = New-Object System.Drawing.Bitmap $bm, 32, 32
+        $ni.Icon = [System.Drawing.Icon]::FromHandle($sm.GetHicon())
+    }
+    $ni.Text = "5AM Optimizer v$AppVersion"
+    $menu = New-Object System.Windows.Forms.ContextMenuStrip
+    $mi = $menu.Items.Add('Deschide 5AM Optimizer'); $mi.Font = New-Object System.Drawing.Font($mi.Font, [System.Drawing.FontStyle]::Bold); $mi.Add_Click({ Show-Main })
+    $script:miGm = New-Object System.Windows.Forms.ToolStripMenuItem 'Mod joc activ'
+    $script:miGm.CheckOnClick = $true; $script:miGm.Checked = [bool]$script:gm.On
+    $script:miGm.Add_Click({ $script:gm.On = $script:miGm.Checked; $gmOn.IsChecked = $script:gm.On; Save-Gm; Update-GmBadge
+                             Say ("Mod joc: " + $(if ($script:gm.On) { 'ACTIV' } else { 'oprit' })) })
+    [void]$menu.Items.Add($script:miGm)
+    $mi = $menu.Items.Add('Test FPS in joc'); $mi.Add_Click({ Show-Main; Open-Group $benchG })
+    $mi = $menu.Items.Add('Scor 5AM si sfaturi'); $mi.Add_Click({ Show-Main; Close-Group; $script:selKey = 'SCOR'; Update-Score; Show-Detail })
+    [void]$menu.Items.Add('-')
+    $mi = $menu.Items.Add('Iesire'); $mi.Add_Click({ Exit-App })
+    $ni.ContextMenuStrip = $menu
+    $ni.Add_MouseClick({ if ($_.Button -eq [System.Windows.Forms.MouseButtons]::Left) { Show-Main } })
+    $ni.Visible = $true
+    $script:ni = $ni
+}
+$script:taskName = '5AM Optimizer'
+function Get-Autostart { try { [bool](Get-ScheduledTask -TaskName $script:taskName -ErrorAction Stop) } catch { $false } }
+function Set-Autostart($on) {
+    if (-not $on) { Unregister-ScheduledTask -TaskName $script:taskName -Confirm:$false -ErrorAction SilentlyContinue; return }
+    if ($script:isExe) { $act = New-ScheduledTaskAction -Execute $script:selfExe -Argument '-Tray' }
+    else { $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`" -Tray" }
+    $usr = "$env:USERDOMAIN\$env:USERNAME"
+    $tr = New-ScheduledTaskTrigger -AtLogOn -User $usr
+    $pr = New-ScheduledTaskPrincipal -UserId $usr -LogonType Interactive -RunLevel Highest
+    $st = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+    Register-ScheduledTask -TaskName $script:taskName -Action $act -Trigger $tr -Principal $pr -Settings $st -Force -ErrorAction Stop | Out-Null
+}
+function Restart-App {
+    try { $script:appMutex.ReleaseMutex(); $script:appMutex.Dispose() } catch {}
+    if ($script:isExe) { Start-Process -FilePath $script:selfExe }
+    elseif ($PSCommandPath) { Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`"" }
+    Exit-App
+}
+
+# ---------- Folderul SETARI APLICATIE ----------
+$setPanel = New-Object Windows.Controls.StackPanel
+$setG = @{ Name = 'Setari aplicatie'; Checks = @(); Col = '#FFB7C5'; Panel = $setPanel; NoBulk = $true }
+$setG.Badge = TB "tema $($script:themes[[string]$script:cfg.Theme].N)" 11 '#8A6A72' $false
+$tt = TB 'TEMA' 12 '#FF9F1C' $true; $tt.Margin = '0,0,0,8'; $setPanel.Children.Add($tt) | Out-Null
+$thWrap = New-Object Windows.Controls.WrapPanel; $thWrap.Margin = '0,0,0,6'
+$script:thBtns = @()
+foreach ($tk in $script:themes.Keys) {
+    $th = $script:themes[$tk]
+    $bd = New-Object Windows.Controls.Border; $bd.Width = 150; $bd.Height = 64; $bd.Margin = '0,0,10,10'; $bd.CornerRadius = 12; $bd.Padding = 10
+    $bd.BorderThickness = 2; $bd.Cursor = [Windows.Input.Cursors]::Hand; $bd.Tag = $tk
+    $bd.Background = $bc.ConvertFromString((Convert-Hue '#120609' $th.H))
+    $bd.BorderBrush = $bc.ConvertFromString($(if ($tk -eq $script:cfg.Theme) { Convert-Hue '#FF2E4D' $th.H } else { Convert-Hue '#34101A' $th.H }))
+    $row = New-Object Windows.Controls.StackPanel; $row.Orientation = 'Horizontal'
+    foreach ($hx in '#FF2E4D', '#FF7A93', '#FFB7C5') {
+        $el = New-Object Windows.Shapes.Ellipse; $el.Width = 16; $el.Height = 16; $el.Margin = '0,0,4,0'; $el.Fill = $bc.ConvertFromString((Convert-Hue $hx $th.H)); $row.Children.Add($el) | Out-Null }
+    $col2 = New-Object Windows.Controls.StackPanel; $col2.Children.Add($row) | Out-Null
+    $nmT = New-Object Windows.Controls.TextBlock; $nmT.Text = $th.N + $(if ($tk -eq $script:cfg.Theme) { '  (activa)' } else { '' }); $nmT.FontWeight = 'Bold'; $nmT.FontSize = 12
+    $nmT.Foreground = $bc.ConvertFromString((Convert-Hue '#FFE4EA' $th.H)); $nmT.Margin = '0,6,0,0'; $col2.Children.Add($nmT) | Out-Null
+    $bd.Child = $col2
+    $bd.Add_MouseLeftButtonUp({
+        $k = $args[0].Tag
+        if ($k -eq $script:cfg.Theme) { return }
+        $script:cfg.Theme = $k; Save-Cfg
+        foreach ($b2 in $script:thBtns) { $b2.BorderBrush = $bc.ConvertFromString($(if ($b2.Tag -eq $k) { Convert-Hue '#FF2E4D' $script:themes[$k].H } else { Convert-Hue '#34101A' $script:themes[$b2.Tag].H })) }
+        $thRestart.Visibility = 'Visible'
+        Say "Tema $($script:themes[$k].N) se aplica dupa repornirea aplicatiei."
+    })
+    $thWrap.Children.Add($bd) | Out-Null; $script:thBtns += $bd
+}
+$setPanel.Children.Add($thWrap) | Out-Null
+$thRestart = New-PillBtn 'REPORNESTE APLICATIA CA SA APLICI TEMA'; $thRestart.Visibility = 'Collapsed'
+$thRestart.Add_Click({ Restart-App })
+$setPanel.Children.Add($thRestart) | Out-Null
+$ot = TB 'COMPORTAMENT' 12 '#FF9F1C' $true; $ot.Margin = '0,8,0,8'; $setPanel.Children.Add($ot) | Out-Null
+$optWrap = New-Object Windows.Controls.WrapPanel
+$cbPet = New-Row 'Petale de cires la click' 'Efectul cu flori de cires cand apesi oriunde in aplicatie'
+$cbPet.IsChecked = [bool]$script:cfg.Petals
+$cbPet.Add_Click({ $script:cfg.Petals = [bool]$args[0].IsChecked; Save-Cfg })
+$cbTray = New-Row 'Ramane langa ceas cand inchizi fereastra' 'Mod joc, timer-ul si curatarea memoriei continua sa lucreze; iconita are meniu cu click dreapta'
+$cbTray.IsChecked = [bool]$script:cfg.Tray
+$cbTray.Add_Click({ $script:cfg.Tray = [bool]$args[0].IsChecked; Save-Cfg; if ($script:cfg.Tray) { try { Enable-Tray } catch { Say "FAIL langa ceas: $($_.Exception.Message)" } } })
+$cbAuto = New-Row 'Porneste odata cu Windows (direct langa ceas)' 'Fara fereastra si fara intrebarea de administrator la fiecare pornire (task programat Windows)'
+$cbAuto.IsChecked = Get-Autostart
+$cbAuto.Add_Click({
+    $on = [bool]$args[0].IsChecked
+    try {
+        Set-Autostart $on
+        if ($on) { $script:cfg.Tray = $true; $cbTray.IsChecked = $true; Save-Cfg; Enable-Tray; Say 'Pornire cu Windows: activa (porneste minimizat langa ceas).' }
+        else { Say 'Pornire cu Windows: oprita.' }
+    } catch { $args[0].IsChecked = -not $on; Say "FAIL pornire cu Windows: $($_.Exception.Message)" }
+})
+foreach ($cb in $cbPet, $cbTray, $cbAuto) { $optWrap.Children.Add($cb) | Out-Null }
+$setPanel.Children.Add($optWrap) | Out-Null
+$ab = TB "5AM Optimizer v$AppVersion   |   github.com/claudiujoldos-ai/5AM-Optimizer   |   iconite 3D: Microsoft Fluent Emoji (MIT)" 10.5 '#8A6A72' $false
+$ab.Margin = '0,12,0,0'; $ab.TextWrapping = 'Wrap'; $setPanel.Children.Add($ab) | Out-Null
+New-FolderTile $setG (Emo 0x2699) 'SETARI APLICATIE'
+
+# A doua pornire a aplicatiei aduce fereastra aceasta in fata
+if ($script:showEvt) {
+    $showT = New-Object Windows.Threading.DispatcherTimer; $showT.Interval = [TimeSpan]::FromMilliseconds(500)
+    $showT.Add_Tick({ try { if ($script:showEvt.WaitOne(0)) { Show-Main } } catch {} }); $showT.Start()
+}
+$w.Add_Closing({
+    param($s, $e)
+    if ($script:cfg.Tray -and $script:ni -and -not $script:reallyExit) {
+        $e.Cancel = $true; $w.Hide()
+        if (-not $script:trayTold) { $script:trayTold = $true
+            try { $script:ni.ShowBalloonTip(4000, '5AM Optimizer', 'Ruleaza in continuare langa ceas. Mod joc ramane activ. Click dreapta pe iconita pentru meniu si Iesire.', [System.Windows.Forms.ToolTipIcon]::Info) } catch {} }
+    }
+})
+$w.Add_Closed({ try { if ($script:ni) { $script:ni.Visible = $false; $script:ni.Dispose() } } catch {}; $w.Dispatcher.InvokeShutdown() })
 
 function Find-Game {
     $re = '\\steamapps\\common\\|\\Epic Games\\|\\GOG Galaxy\\Games\\|\\GOG Games\\|\\Riot Games\\|\\XboxGames\\|\\Ubisoft Game Launcher\\games\\|\\EA Games\\|\\Origin Games\\|\\Rockstar Games\\'
@@ -2007,7 +2360,7 @@ $script:applyTimer.Add_Tick({
         switch ($tag) {
             'DONE' { $script:applyTimer.Stop(); Save-Backup; $Bar.Value = $Bar.Maximum
                      Say ''; Say 'GATA! Reporneste PC-ul ca toate modificarile sa se aplice.'; Say 'Dupa restart, deschide aplicatia si vezi comparatia inainte/dupa.'
-                     $BtnApply.IsEnabled = $true; $BtnRevert.IsEnabled = $true
+                     $BtnApply.IsEnabled = $true; $BtnRevert.IsEnabled = $true; Update-Score
                      try { $script:wk.Dispose(); $script:wrs.Dispose() } catch {} }
             'OK'   { Say "OK   $txt"; $Bar.Value += 1 }
             'F'    { Say "FAIL $txt"; $Bar.Value += 1 }
@@ -2094,7 +2447,7 @@ function Add-Petal($x, $y, $vx, $vy) {
 function Add-Ring($x, $y) {
     $e = New-Object Windows.Shapes.Ellipse
     $e.Width = 10; $e.Height = 10; $e.Stroke = Br '#FF2E4D'; $e.StrokeThickness = 2
-    $e.Effect = New-Object Windows.Media.Effects.DropShadowEffect -Property @{ Color = [Windows.Media.Color]::FromRgb(255, 46, 77); BlurRadius = 14; ShadowDepth = 0 }
+    $e.Effect = New-Object Windows.Media.Effects.DropShadowEffect -Property @{ Color = (Br '#FF2E4D').Color; BlurRadius = 14; ShadowDepth = 0 }
     [Windows.Controls.Canvas]::SetLeft($e, $x - 5); [Windows.Controls.Canvas]::SetTop($e, $y - 5); $Fx.Children.Add($e) | Out-Null
     [void]$ps.Add(@{ E = $e; X = $x; Y = $y; K = 'r'; Life = 1.0; S = 10 })
 }
@@ -2118,6 +2471,7 @@ $fxT.Add_Tick({
 })
 $w.Add_PreviewMouseLeftButtonDown({
     param($s, $e)
+    if (-not $script:cfg.Petals) { return }
     $pt = $e.GetPosition($Fx); Add-Ring $pt.X $pt.Y; $fxT.Start()
     1..7 | ForEach-Object { $a = $rnd.NextDouble() * 6.28; Add-Petal $pt.X $pt.Y ([Math]::Cos($a) * 3) ([Math]::Sin($a) * 3 - 1) }
 })
@@ -2194,7 +2548,7 @@ function Install-Update {
         if (-not (Test-Path $bkDir)) { New-Item $bkDir -ItemType Directory -Force | Out-Null }
         Set-Content -Path $flagFile -Value (@($script:upd.Ver) + $notes) -Encoding UTF8
         Start-Process -FilePath $env:ComSpec -ArgumentList '/c', "`"$cmd`"" -WindowStyle Hidden
-        try { $tm.Stop(); $fxT.Stop(); $gmTimer.Stop(); $worker.Stop() } catch {}
+        try { $tm.Stop(); $fxT.Stop(); $gmTimer.Stop(); $worker.Stop(); if ($script:ni) { $script:ni.Visible = $false; $script:ni.Dispose() } } catch {}
         [Environment]::Exit(0)
     } catch {
         $script:updState = 'failed'
@@ -2274,6 +2628,16 @@ if ($SelfTest) {
         $smp = @(@{ Cpu = 40; Core = 97; Gpu = 60; VU = 7000; VT = 8192; Ram = 50 }, @{ Cpu = 45; Core = 95; Gpu = 62; VU = 7100; VT = 8192; Ram = 52 })
         $bn = Get-Bottleneck $smp 120 240; if ($bn.Kind -ne 'CPU') { $errs += "bottleneck: $($bn.Kind)" }
         Show-Bottleneck $bn 'test'
+        if ($script:iconPack.Count -lt 60) { $errs += "iconite 3D incorporate: $($script:iconPack.Count)" }
+        if (-not ((Icon (Emo 0x1F680) 30) -is [Windows.Controls.Image])) { $errs += 'iconita 3D nu se afiseaza' }
+        $th0 = $script:cfg.Theme; $script:cfg.Theme = 'midnight'; $script:themeCache = @{}
+        $bl = Convert-ThemeColor '#FF2E4D'; if ([Convert]::ToInt32($bl.Substring(5, 2), 16) -le [Convert]::ToInt32($bl.Substring(1, 2), 16)) { $errs += "tema midnight: $bl" }
+        if ((Convert-ThemeColor '#4ADE80') -ne '#4ADE80') { $errs += 'culorile fixe se schimba cu tema' }
+        $script:cfg.Theme = $th0; $script:themeCache = @{}
+        $sco = Get-Score; if (-not ($sco.Score -ge 0 -and $sco.Score -le 100 -and $sco.Items.Count -ge 14)) { $errs += "scor: $($sco.Score) / $($sco.Items.Count)" }
+        Set-ScoreArc 73; Set-ScoreArc 100; Set-ScoreArc 0
+        1..50 | ForEach-Object { Push-Spark 'CPU' ($_ * 2) }
+        if ($script:themes.Count -ne 4) { $errs += 'teme' }
         $benchSave = $benchFile; $benchFile = Join-Path $env:TEMP ('5am_st_bench_' + [guid]::NewGuid().ToString('N') + '.json')
         Add-BenchHistory @{ Type = 'fps'; Date = 'a'; App = 'x.exe'; Avg = 100.5; Low1 = 80 }
         Add-BenchHistory @{ Type = 'stress'; Date = 'b'; CpuMulti = 500; GpuFps = 200 }
@@ -2302,5 +2666,7 @@ $w.Icon = $script:logoBmp
 $left = 2000 - ((Get-Date) - $script:splashT0).TotalMilliseconds
 if ($left -gt 0) { Start-Sleep -Milliseconds ([int]$left) }
 $script:splash.Close()
-$w.ShowDialog() | Out-Null
+if ($script:cfg.Tray -or $Tray) { try { Enable-Tray } catch {} }
+if (-not ($Tray -and $script:ni)) { $w.Show() }
+[Windows.Threading.Dispatcher]::Run()
 try { $worker.Stop(); $rs.Close() } catch {}
