@@ -10,11 +10,12 @@ Aplicatie cu interfata grafica (WPF) pentru Windows 11 care dezactiveaza functii
 - **Privacy**: fara ID de reclame, Timeline, locatie, feedback, tracking in Start, Spotlight pe lockscreen
 - **Power plan**: Ultimate Performance, PCIe / USB suspend oprite, hibernare oprita, Power Throttling oprit
 - **GPU si gaming**: Game Mode, Game DVR oprit, HAGS, mouse fara acceleratie
-- **FPS BOOST**: prioritate pentru jocul din prim-plan, VRR si in jocurile windowed, optimizari jocuri windowed, fara Sticky Keys in jocuri, Game Bar fara popup-uri, fara upload P2P, Nagle oprit, CPU la maxim (optional MPO, timer global, fullscreen optimizations)
+- **FPS BOOST**: prioritate pentru jocul din prim-plan, VRR si in jocurile windowed, optimizari jocuri windowed, fara Sticky Keys in jocuri, Game Bar fara popup-uri, fara upload P2P, Nagle oprit, CPU la maxim (optional MPO, timer global, fullscreen optimizations, MSI mode pentru placa video)
 - **Performanta Windows**: meniuri instant, aplicatiile de la pornire fara intarziere, Edge oprit in fundal, efecte vizuale reduse (optional: indexare, SysMain, drivere prin Windows Update)
 - **Retea**: prioritate jocuri (MMCSS), cache DNS golit, DNS Cloudflare optional
 - **Curatenie disc**: cache shadere, Windows Update, browsere, Windows.old (optional)
 - **Servicii**: telemetrie oprita, servicii rar folosite pe Manual
+- **Securitate (optional)**: Memory Integrity, VBS, excluderi Windows Defender pentru folderele cu jocuri
 - **Curatare aplicatii**: sterge aplicatii preinstalate (Teams, Bing News, Solitaire, OneDrive etc.)
 
 ### Foldere speciale

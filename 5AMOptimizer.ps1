@@ -263,6 +263,13 @@ $tweaks = @(
     RegSet 'HKCU:\Control Panel\Accessibility\StickyKeys' 'Flags' '506' 'String'
     RegSet 'HKCU:\Control Panel\Accessibility\Keyboard Response' 'Flags' '122' 'String'
     RegSet 'HKCU:\Control Panel\Accessibility\ToggleKeys' 'Flags' '58' 'String' }},
+ @{G='FPS BOOST'; NoStar=$true; P=9; I='1F50C'; L='Optional: MSI mode pentru placa video'; T='Placa video foloseste Message Signaled Interrupts: latenta mai mica la intreruperi. Multe drivere noi il au deja pornit. Necesita restart. Daca apare ecran negru, porneste in Safe Mode si apasa REVINO.'; Do={
+    $done = @()
+    foreach ($a in @(Get-CimInstance Win32_VideoController | Where-Object { $_.PNPDeviceID -like 'PCI\*' -and $_.Name -notmatch 'Radeon\(TM\) Graphics$|Radeon Graphics$|Vega \d+ Graphics|Intel.*(UHD|Iris|HD Graphics)|Basic' })) {
+        $k = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($a.PNPDeviceID)\Device Parameters\Interrupt Management\MessageSignaledInterruptProperties"
+        RegSet $k 'MSISupported' 1; $done += $a.Name
+    }
+    if (-not $done.Count) { throw 'nu am gasit o placa video dedicata PCIe' } }},
  @{G='FPS BOOST'; NoStar=$true; P=9; I='1F9EA'; L='Optional: MPO oprit (flicker / stutter)'; T='Opreste Multiplane Overlay. Foloseste-l DOAR daca ai flicker, ecran negru scurt sau stutter. Necesita restart.'; Do={
     RegSet 'HKLM:\SOFTWARE\Microsoft\Windows\Dwm' 'OverlayTestMode' 5 }},
  @{G='FPS BOOST'; NoStar=$true; P=9; I='23F1'; L='Optional: timer global Windows 11'; T='Restaureaza comportamentul vechi al timerului: frametime mai stabil in unele jocuri, dar consum mai mare.'; Do={
@@ -274,7 +281,35 @@ $tweaks = @(
 
  # P=9: nu este bifat de niciun profil, il activezi doar manual
  @{G='SECURITATE (OPTIONAL)'; P=9; L='Memory Integrity (HVCI) oprit: putin mai multe FPS, dar protectie mai mica (restart)'; Do={
-    RegSet 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity' 'Enabled' 0 }}
+    RegSet 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity' 'Enabled' 0 }},
+ @{G='SECURITATE (OPTIONAL)'; P=9; I='1F6E1'; L='VBS (Virtualization Based Security) oprit: cateva procente FPS, protectie mai mica (restart)'; T='Opreste securitatea bazata pe virtualizare. Pe unele PC-uri da 5-10% FPS in plus. Nu opreste Hyper-V sau WSL. Daca e blocat din UEFI, setarea nu are efect.'; Do={
+    RegSet 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard' 'EnableVirtualizationBasedSecurity' 0
+    RegSet 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard' 'RequirePlatformSecurityFeatures' 0 }},
+ @{G='SECURITATE (OPTIONAL)'; P=9; I='1F4C2'; L='Windows Defender: excluderi pentru folderele cu jocuri'; T='Defender nu mai scaneaza folderele Steam, Epic, Xbox, Riot, GOG, EA, Ubisoft, Battle.net: mai putine sacadari la incarcare. Fisierele din ele nu mai sunt verificate. REVINO le scoate.'; Do={
+    $roots = @()
+    foreach ($v in @(Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' })) {
+        $dl = "$($v.DriveLetter):"
+        $roots += "$dl\XboxGames", "$dl\SteamLibrary\steamapps\common", "$dl\Games", "$dl\Epic Games", "$dl\Riot Games", "$dl\GOG Games"
+    }
+    foreach ($pf in $env:ProgramFiles, ${env:ProgramFiles(x86)}) {
+        $roots += "$pf\Steam\steamapps\common", "$pf\Epic Games", "$pf\Riot Games", "$pf\GOG Galaxy\Games", "$pf\EA Games", "$pf\Electronic Arts", "$pf\Ubisoft\Ubisoft Game Launcher\games", "$pf\Battle.net", "$pf\Rockstar Games"
+    }
+    # biblioteci Steam suplimentare din libraryfolders.vdf
+    foreach ($pf in $env:ProgramFiles, ${env:ProgramFiles(x86)}) {
+        $vdf = "$pf\Steam\steamapps\libraryfolders.vdf"
+        if (Test-Path $vdf) { foreach ($m in [regex]::Matches((Get-Content $vdf -Raw), '"path"\s+"([^"]+)"')) { $roots += ($m.Groups[1].Value -replace '\\\\', '\') + '\steamapps\common' } }
+    }
+    $found = @($roots | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | ForEach-Object { (Resolve-Path -LiteralPath $_).Path } | Select-Object -Unique)
+    if (-not $found.Count) { throw 'nu am gasit foldere cu jocuri' }
+    $have = @(); try { $have = @((Get-MpPreference -ErrorAction Stop).ExclusionPath) } catch { throw 'Windows Defender nu raspunde (alt antivirus activ?)' }
+    $add = @($found | Where-Object { $have -notcontains $_ })
+    if ($add.Count) { Add-MpPreference -ExclusionPath $add -ErrorAction Stop }
+    # tinem minte ce am adaugat noi, ca REVINO sa scoata doar acestea
+    $df = "$env:APPDATA\WinGameOptimizer\defender.json"
+    $prev = @(); if (Test-Path $df) { $prev = @(Get-Content $df -Raw | ConvertFrom-Json) }
+    New-Item (Split-Path $df) -ItemType Directory -Force | Out-Null
+    ConvertTo-Json -InputObject @(@($prev + $add) | Select-Object -Unique) | Set-Content $df -Encoding UTF8
+    if (-not $add.Count) { throw "erau deja excluse: $($found -join ', ')" } }}
 )
 
 # ---------- Curatare aplicatii (dupa Winhance) ----------
@@ -1267,7 +1302,7 @@ $BtnApply.Add_Click({
     $script:applyTimer.Start(); [void]$script:wk.BeginInvoke()
 })
 $BtnRevert.Add_Click({
-    if ($script:bk.Count -eq 0 -and -not (Test-Path $metaFile)) { Say 'Nu exista nimic de anulat.'; return }
+    if ($script:bk.Count -eq 0 -and -not (Test-Path $metaFile) -and -not (Test-Path "$bkDir\defender.json")) { Say 'Nu exista nimic de anulat.'; return }
     foreach ($e in @($script:bk.Values)) {
         try {
             if ($e.Existed) { Set-ItemProperty -Path $e.Path -Name $e.Name -Value $e.Value -Type $e.Kind -Force }
@@ -1280,6 +1315,12 @@ $BtnRevert.Add_Click({
         try { powercfg /setactive $m.Scheme; Say "UNDO power plan original" } catch {}
         if ($m.Hiber) { powercfg /hibernate on; Say 'UNDO hibernare pornita' }
         Remove-Item $metaFile -Force
+    }
+    $df = "$bkDir\defender.json"
+    if (Test-Path $df) {
+        try { $ex = @(Get-Content $df -Raw | ConvertFrom-Json)
+              if ($ex.Count) { Remove-MpPreference -ExclusionPath $ex -ErrorAction Stop; Say "UNDO excluderi Defender ($($ex.Count) foldere)" }
+              Remove-Item $df -Force } catch { Say "FAIL undo excluderi Defender: $($_.Exception.Message)" }
     }
     $script:bk.Clear(); Remove-Item $bkFile -Force -ErrorAction SilentlyContinue; $Bar.Value = 0
     Say 'Setarile originale au fost puse la loc. Aplicatiile sterse nu revin de aici (le reinstalezi din Microsoft Store / winget).'
