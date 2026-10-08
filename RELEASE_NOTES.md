@@ -1,6 +1,4 @@
-5AM Optimizer v1.3.0
-- Folder NVIDIA GEFORCE cu setarile recomandate de NVIDIA (Reflex, Low Latency, G-Sync, limita FPS, shader cache)
-- Mod joc: timer Windows 0.5 ms si curatarea memoriei standby (ca ISLC) in timpul jocului, optionale
-- Mod joc: prioritatea mare pentru joc e acum optionala (implicit oprita, zero contact cu procesul jocului)
-- RETEA: placa de retea fara economie de energie (fara varfuri de ping), optional si reversibil
-- SFATURI: verifica VBS, HAGS si Game Mode
+5AM Optimizer v1.3.1
+- Folder AMD RADEON ADRENALIN refacut (apare doar pe placi AMD dedicate), la fel de complet ca cel NVIDIA
+- Corectat: Anti-Lag din driver si HYPR-RX nu mai sunt recomandate in jocurile online cu anti-cheat (risc de ban); se recomanda Anti-Lag 2 din joc
+- AMD: FreeSync cu limita de FPS calculata pentru monitorul tau, Chill, Boost, FSR vs RSR, AFMF, Image Sharpening, undervolt

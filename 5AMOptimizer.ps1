@@ -3,7 +3,7 @@
 param([switch]$SelfTest)
 
 # Versiunea se suprascrie automat din tag-ul GitHub la build (v1.2.3 -> 1.2.3). Nu o muta de pe linia asta.
-$AppVersion = '1.3.0'
+$AppVersion = '1.3.1'
 # Repo-ul GitHub de unde se descarca actualizarile (owner/repo)
 $UpdateRepo = 'claudiujoldos-ai/5AM-Optimizer'
 
@@ -1194,20 +1194,29 @@ $gmG.Badge = TB '' 11 '#8A6A72' $false
 Update-GmBadge
 New-FolderTile $gmG (Emo 0x1F579) 'MOD JOC'
 
-# --- AMD Radeon: setari recomandate in Adrenalin (apare doar daca ai placa AMD) ---
+$script:refreshHz = [int](($script:gpuAdapters | Measure-Object CurrentRefreshRate -Maximum).Maximum)
+# --- AMD Radeon: setari recomandate in Adrenalin (apare doar daca placa video dedicata e AMD) ---
 if ($gpuVendors -contains 'AMD') {
     $amdPanel = New-Object Windows.Controls.StackPanel
-    $an = TB 'Setari manuale din AMD Software: Adrenalin Edition. Nu se pot aplica automat din aplicatie.' 11 '#FF7A93' $false
+    $an = TB 'Setari manuale din AMD Software: Adrenalin Edition (Gaming > Graphics si Display). Driverul nu permite aplicarea lor automata in siguranta.' 11 '#FF7A93' $false
     $an.TextWrapping = 'Wrap'; $an.Margin = '0,0,0,6'
     $amdPanel.Children.Add($an) | Out-Null
+    $cap = [math]::Max(0, $script:refreshHz - 3)
     foreach ($ln in @(
-        'Smart Access Memory: pornit. In BIOS activeaza Above 4G Decoding si Resizable BAR, apoi in Adrenalin la Performance > Tuning.',
-        'Radeon Chill: oprit (limiteaza FPS-ul si adauga latenta).',
-        'Enhanced Sync: oprit. Cu monitor FreeSync foloseste FreeSync si o limita de FPS cu 3 sub refresh (ex. 141 la 144 Hz).',
-        'Anti-Lag: pornit in jocurile competitive (latenta mai mica). Daca un joc cu anti-cheat da erori, opreste-l pentru acel joc.',
-        'Texture Filtering Quality: Performance. Surface Format Optimization: pornit. Tessellation: AMD Optimized.',
-        'Shader Cache: AMD Optimized (nu il opri). Radeon Boost, Image Sharpening si AFMF: doar daca accepti calitate mai mica sau latenta mai mare pentru FPS in plus.')) {
-        $x = TB ("- " + $ln) 12 '#F3E6EA' $false; $x.TextWrapping = 'Wrap'; $x.Margin = '0,8,0,0'
+        'Anti-Lag 2: pornit din setarile jocului, in jocurile care il au. E integrat in joc, deci e sigur cu anti-cheat.',
+        'ATENTIE: Anti-Lag din Adrenalin (cel vechi, din driver) si HYPR-RX (care il include): OPRITE in jocurile online cu anti-cheat (FiveM, CS2, Valorant etc.). Versiunea din driver a dus in trecut la ban-uri. Le poti folosi doar in single-player.',
+        "FreeSync: pornit (Display). Limita de FPS cu 3 sub refresh (la tine: $cap la $($script:refreshHz) Hz), din joc sau din Frame Rate Target Control, ca sa ramai in zona FreeSync.",
+        'Enhanced Sync: oprit cand ai FreeSync. V-Sync oprit in joc pentru latenta minima.',
+        'Radeon Chill: oprit in jocurile competitive. In single-player il poti folosi ca limita de FPS (minim 60, maxim refresh) pentru mai putina caldura si zgomot.',
+        'Radeon Boost: oprit. Scade rezolutia in miscare; ajuta doar in shootere cand nu poti tine FPS-ul dorit.',
+        'Smart Access Memory: pornit. In BIOS activeaza Above 4G Decoding si Resizable BAR.',
+        'Upscaling: FSR din setarile jocului (Quality sau Balanced) arata mai bine decat Radeon Super Resolution din driver. RSR doar pentru jocuri vechi fara FSR.',
+        'AFMF (frame generation din driver): mai multe FPS afisate, dar latenta mai mare. Doar in single-player, nu in competitive.',
+        'Image Sharpening: 50-60% pentru o imagine mai clara, aproape fara cost de FPS.',
+        'Texture Filtering Quality: Performance. Tessellation: AMD Optimized. Shader Cache: AMD Optimized (nu il opri).',
+        'Performance > Tuning: undervolt automat pentru temperaturi si consum mai mici la aceleasi frecvente. Testeaza stabilitatea in jocuri dupa.',
+        'In Windows: Setari > Sistem > Afisare > Setari avansate de afisare > rata de reimprospatare maxima.')) {
+        $x = TB ("- " + $ln) 12 $(if ($ln.StartsWith('ATENTIE')) { '#FFB020' } else { '#F3E6EA' }) $false; $x.TextWrapping = 'Wrap'; $x.Margin = '0,8,0,0'
         $amdPanel.Children.Add($x) | Out-Null
     }
     $amdG = @{ Name = 'AMD Radeon'; Checks = @(); Col = '#FF2E4D'; Panel = $amdPanel; NoBulk = $true }
@@ -1215,7 +1224,6 @@ if ($gpuVendors -contains 'AMD') {
     New-FolderTile $amdG (Emo 0x1F534) 'AMD RADEON ADRENALIN'
 }
 
-$script:refreshHz = [int](($script:gpuAdapters | Measure-Object CurrentRefreshRate -Maximum).Maximum)
 # --- NVIDIA GeForce: setari recomandate (ghidul NVIDIA de latenta); manuale, din NVIDIA Control Panel / joc ---
 if ($gpuVendors -contains 'NVIDIA') {
     $nvPanel = New-Object Windows.Controls.StackPanel
