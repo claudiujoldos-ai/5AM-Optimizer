@@ -3,7 +3,7 @@
 param([switch]$SelfTest)
 
 # Versiunea se suprascrie automat din tag-ul GitHub la build (v1.2.3 -> 1.2.3). Nu o muta de pe linia asta.
-$AppVersion = '1.2.0'
+$AppVersion = '1.3.0'
 # Repo-ul GitHub de unde se descarca actualizarile (owner/repo)
 $UpdateRepo = 'claudiujoldos-ai/5AM-Optimizer'
 
@@ -193,6 +193,30 @@ $tweaks = @(
     RegSet $gm 'GPU Priority' 8; RegSet $gm 'Priority' 6
     RegSet $gm 'Scheduling Category' 'High' 'String'; RegSet $gm 'SFIO Priority' 'High' 'String' }},
  @{G='RETEA'; P=2; L='Cache DNS golit'; Do={ ipconfig /flushdns | Out-Null }},
+ @{G='RETEA'; P=9; NoStar=$true; I='1F50B'; L='Placa de retea fara economie de energie (fara varfuri de ping)'; T='Opreste Energy Efficient Ethernet, Green Ethernet si oprirea placii de catre Windows pentru economie. Ajuta mai ales pe laptopuri. Conexiunea se reia cateva secunde la aplicare. REVINO pune totul la loc.'; Do={
+    $nf = "$env:APPDATA\WinGameOptimizer\netadapter.json"
+    $log = @(); if (Test-Path $nf) { $log = @(Get-Content $nf -Raw | ConvertFrom-Json) }
+    $kw = '^(\*EEE|AdvancedEEE|EEELinkAdvertisement|EnableGreenEthernet|GigaLite|PowerSavingMode|ULPMode|EnablePowerManagement)$'
+    $ch = 0
+    foreach ($na in @(Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' })) {
+        foreach ($pr in @(Get-NetAdapterAdvancedProperty -Name $na.Name -AllProperties -ErrorAction SilentlyContinue | Where-Object { $_.RegistryKeyword -match $kw })) {
+            $old = [string]@($pr.RegistryValue)[0]
+            if ($old -ne '0' -and (@($pr.ValidRegistryValues) -contains '0' -or -not $pr.ValidRegistryValues)) {
+                Set-NetAdapterAdvancedProperty -Name $na.Name -RegistryKeyword $pr.RegistryKeyword -RegistryValue '0' -NoRestart -ErrorAction Stop
+                if (-not ($log | Where-Object { $_.N -eq $na.Name -and $_.K -eq $pr.RegistryKeyword })) { $log += [pscustomobject]@{ N = $na.Name; K = $pr.RegistryKeyword; V = $old } }
+                $ch++
+            }
+        }
+        try { $pmg = Get-NetAdapterPowerManagement -Name $na.Name -ErrorAction Stop
+              if ([string]$pmg.AllowComputerToTurnOffDevice -eq 'Enabled') {
+                  Set-NetAdapterPowerManagement -Name $na.Name -AllowComputerToTurnOffDevice Disabled -NoRestart -ErrorAction Stop
+                  if (-not ($log | Where-Object { $_.N -eq $na.Name -and $_.K -eq '#PM' })) { $log += [pscustomobject]@{ N = $na.Name; K = '#PM'; V = 'Enabled' } }
+                  $ch++ } } catch {}
+        if ($ch) { Restart-NetAdapter -Name $na.Name -ErrorAction SilentlyContinue }
+    }
+    New-Item (Split-Path $nf) -ItemType Directory -Force | Out-Null
+    ConvertTo-Json -InputObject @($log) | Set-Content $nf -Encoding UTF8
+    if (-not $ch) { throw 'nu era nimic de schimbat (setarile erau deja oprite sau placa nu le are)' } }},
  @{G='RETEA'; P=9; NoStar=$true; L='DNS Cloudflare 1.1.1.1 pe conexiunea activa (se aplica dupa restart)'; Do={
     $ifs = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces'
     foreach ($n in @(Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' })) {
@@ -754,6 +778,18 @@ $worker = [powershell]::Create(); $worker.Runspace = $rs
             if ($o -match 'NTFS\s+DisableDeleteNotify\s*=\s*1') { $tips += 'TRIM pare oprit pe SSD. Ca administrator: fsutil behavior set DisableDeleteNotify 0' }
         }
     } catch {}
+    try {
+        $dg = Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard -ErrorAction Stop
+        if ($dg.VirtualizationBasedSecurityStatus -eq 2) { $tips += 'VBS (securitate prin virtualizare) ruleaza: poate costa 5-10% FPS in jocurile limitate de procesor. Il poti opri din SECURITATE (OPTIONAL), cu protectie mai mica.' }
+    } catch {}
+    try {
+        $hs = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name HwSchMode -ErrorAction Stop).HwSchMode
+        if ($hs -ne 2) { $tips += 'HAGS (GPU Scheduling hardware) e oprit: DLSS Frame Generation are nevoie de el. Il pornesti din GPU SI GAMING.' }
+    } catch { $tips += 'HAGS (GPU Scheduling hardware) nu e setat: il pornesti din GPU SI GAMING (testeaza, castigul variaza de la joc la joc).' }
+    try {
+        $gmv = (Get-ItemProperty 'HKCU:\Software\Microsoft\GameBar' -Name AutoGameModeEnabled -ErrorAction Stop).AutoGameModeEnabled
+        if ($gmv -eq 0) { $tips += 'Game Mode e oprit: porneste-l (GPU SI GAMING), NVIDIA si Microsoft il recomanda.' }
+    } catch {}
     $sd['Tips'] = $tips
     while ($true) {
         try {
@@ -1108,20 +1144,21 @@ $gmApps = @(
     @{ N = 'Spotify'; L = 'Spotify' }, @{ N = 'ms-teams'; L = 'Microsoft Teams' }, @{ N = 'Teams'; L = 'Teams (clasic)' },
     @{ N = 'OneDrive'; L = 'OneDrive' }, @{ N = 'Slack'; L = 'Slack' }, @{ N = 'Telegram'; L = 'Telegram' },
     @{ N = 'Dropbox'; L = 'Dropbox' }, @{ N = 'Skype'; L = 'Skype' }, @{ N = 'Zoom'; L = 'Zoom' })
-$script:gm = @{ On = $false; Apps = @(); Active = $false; Closed = @(); Idle = 0; Kill = $null }
+$script:gm = @{ On = $false; Apps = @(); Active = $false; Closed = @(); Idle = 0; Kill = $null; Timer = $false; Purge = $false; Prio = $false; LastPurge = [datetime]::MinValue }
 if (Test-Path $gmFile) {
-    try { $c = Get-Content $gmFile -Raw | ConvertFrom-Json; $script:gm.On = [bool]$c.On; $script:gm.Apps = @($c.Apps) } catch {}
+    try { $c = Get-Content $gmFile -Raw | ConvertFrom-Json; $script:gm.On = [bool]$c.On; $script:gm.Apps = @($c.Apps)
+          $script:gm.Timer = [bool]$c.Timer; $script:gm.Purge = [bool]$c.Purge; $script:gm.Prio = [bool]$c.Prio } catch {}
 }
 $script:gmCbs = @()
 function Save-Gm {
     if (-not (Test-Path $bkDir)) { New-Item $bkDir -ItemType Directory -Force | Out-Null }
     $names = @($script:gmCbs | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag.N })
     $script:gm.Apps = $names
-    @{ On = $script:gm.On; Apps = $names } | ConvertTo-Json | Set-Content $gmFile
+    @{ On = $script:gm.On; Apps = $names; Timer = $script:gm.Timer; Purge = $script:gm.Purge; Prio = $script:gm.Prio } | ConvertTo-Json | Set-Content $gmFile
 }
 function Update-GmBadge { $gmG.Badge.Text = $(if ($script:gm.On) { "ACTIV, $(@($script:gmCbs | Where-Object { $_.IsChecked }).Count) aplicatii" } else { 'oprit' }); $gmG.Badge.Foreground = Br $(if ($script:gm.On) { '#FF6B86' } else { '#8A6A72' }) }
 $gmPanel = New-Object Windows.Controls.StackPanel
-$gmn = TB 'Cand porneste un joc (Steam, Epic, Xbox, GOG, Riot, EA sau cele adaugate la GPU pentru jocuri), aplicatiile bifate mai jos se inchid ca sa elibereze RAM si CPU, iar jocul primeste prioritate mare. Dupa ce joci, aplicatiile se redeschid singure. Salveaza-ti munca inainte: inchiderea e normala, fara fortare imediata.' 11 '#FF7A93' $false
+$gmn = TB 'Cand porneste un joc (Steam, Epic, Xbox, GOG, Riot, EA sau cele adaugate la GPU pentru jocuri), aplicatiile bifate mai jos se inchid ca sa elibereze RAM si CPU. Dupa ce joci, aplicatiile se redeschid singure. Salveaza-ti munca inainte: inchiderea e normala, fara fortare imediata.' 11 '#FF7A93' $false
 $gmn.TextWrapping = 'Wrap'; $gmn.Margin = '0,0,0,10'
 $gmOn = New-Row 'MOD JOC ACTIV' 'Bifat = urmareste jocurile si inchide aplicatiile alese'
 $gmOn.IsChecked = $script:gm.On
@@ -1136,7 +1173,22 @@ foreach ($a in $gmApps) {
     $cb.Add_Click({ Save-Gm; Update-GmBadge })
     $gmWrap.Children.Add($cb) | Out-Null; $script:gmCbs += $cb
 }
-$gmPanel.Children.Add($gmn) | Out-Null; $gmPanel.Children.Add($gmOn) | Out-Null; $gmPanel.Children.Add($gmWrap) | Out-Null
+$gmOpt = New-Object Windows.Controls.WrapPanel
+$ramGB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+foreach ($o in @(
+    @{ K = 'Timer'; T = 'Timer Windows 0.5 ms in timpul jocului'; D = 'Frame pacing mai stabil. Revine singur dupa joc. Efect complet cu Optional: timer global (FPS BOOST).' },
+    @{ K = 'Purge'; T = 'Curata memoria standby in timpul jocului'; D = $(if ($ramGB -le 16) { "Recomandat la tine ($ramGB GB RAM): mai putine sacadari dupa sesiuni lungi (ca ISLC)." } else { "Ai $ramGB GB RAM, deci efectul e mic. Util la 16 GB sau mai putin." }) },
+    @{ K = 'Prio'; T = 'Prioritate mare pentru procesul jocului'; D = 'Schimba prioritatea jocului in Windows. Sigur, dar deschide procesul jocului; lasa-l oprit daca vrei zero contact cu jocurile cu anti-cheat.' })) {
+    $cb = New-Row $o.T $o.D; $cb.Tag = $o.K; $cb.IsChecked = [bool]$script:gm[$o.K]
+    $cb.Add_Click({ $k = $args[0].Tag; $script:gm[$k] = [bool]$args[0].IsChecked; Save-Gm
+                    if ($k -ne 'Prio' -and $args[0].IsChecked) { try { Initialize-BenchTypes } catch { Say "FAIL: $($_.Exception.Message)" } } })
+    $gmOpt.Children.Add($cb) | Out-Null
+}
+$gmOptT = TB 'OPTIUNI IN TIMPUL JOCULUI (nu citesc si nu modifica jocul, sigure cu anti-cheat)' 11 '#FF9F1C' $true; $gmOptT.Margin = '0,6,0,8'
+$gmAppsT = TB 'APLICATII INCHISE IN TIMPUL JOCULUI' 11 '#FF9F1C' $true; $gmAppsT.Margin = '0,6,0,8'
+$gmPanel.Children.Add($gmn) | Out-Null; $gmPanel.Children.Add($gmOn) | Out-Null
+$gmPanel.Children.Add($gmOptT) | Out-Null; $gmPanel.Children.Add($gmOpt) | Out-Null
+$gmPanel.Children.Add($gmAppsT) | Out-Null; $gmPanel.Children.Add($gmWrap) | Out-Null
 $gmG = @{ Name = 'Mod joc'; Checks = @(); Col = '#FF2E4D'; Panel = $gmPanel; NoBulk = $true }
 $gmG.Badge = TB '' 11 '#8A6A72' $false
 Update-GmBadge
@@ -1161,6 +1213,31 @@ if ($gpuVendors -contains 'AMD') {
     $amdG = @{ Name = 'AMD Radeon'; Checks = @(); Col = '#FF2E4D'; Panel = $amdPanel; NoBulk = $true }
     $amdG.Badge = TB 'setari recomandate' 11 '#8A6A72' $false
     New-FolderTile $amdG (Emo 0x1F534) 'AMD RADEON ADRENALIN'
+}
+
+$script:refreshHz = [int](($script:gpuAdapters | Measure-Object CurrentRefreshRate -Maximum).Maximum)
+# --- NVIDIA GeForce: setari recomandate (ghidul NVIDIA de latenta); manuale, din NVIDIA Control Panel / joc ---
+if ($gpuVendors -contains 'NVIDIA') {
+    $nvPanel = New-Object Windows.Controls.StackPanel
+    $nn = TB 'Setari manuale (NVIDIA Control Panel > Manage 3D settings, sau din joc). Driverul nu permite aplicarea lor automata in siguranta.' 11 '#FF7A93' $false
+    $nn.TextWrapping = 'Wrap'; $nn.Margin = '0,0,0,6'; $nvPanel.Children.Add($nn) | Out-Null
+    foreach ($ln in @(
+        'NVIDIA Reflex: On + Boost in jocurile care il au (latenta cea mai mica). Reflex limiteaza singur FPS-ul sub refresh cu G-Sync.',
+        'Low Latency Mode: Ultra doar pentru jocurile fara Reflex. Daca jocul are Reflex, Reflex are prioritate.',
+        "G-Sync: pornit pentru fullscreen si windowed. V-Sync: On in NVIDIA Control Panel, Off in joc. Limita FPS cu 3 sub refresh (la tine: $([math]::Max(0, $script:refreshHz - 3)) la $($script:refreshHz) Hz) daca jocul nu are Reflex.",
+        'Fara G-Sync: V-Sync oprit pentru latenta minima (cu tearing) si o limita de FPS stabila din joc.',
+        'Power management mode: Prefer maximum performance doar in Program Settings pentru jocul tau, nu global (altfel placa nu mai coboara in idle).',
+        'Shader Cache Size: Driver Default; pune 10 GB sau Unlimited daca ai sacadari la compilarea shaderelor in jocuri mari.',
+        'Texture filtering - Quality: High performance pentru cateva FPS in plus, cu diferenta vizuala minima.',
+        'DLSS Super Resolution: Quality sau Balanced pentru FPS mai mare. Frame Generation cere RTX 40 sau mai nou si HAGS pornit.',
+        'In Windows: Setari > Sistem > Afisare > Setari avansate de afisare > rata de reimprospatare maxima.',
+        'Fullscreen exclusiv acolo unde jocul il ofera are cea mai mica latenta.')) {
+        $x = TB ("- " + $ln) 12 '#F3E6EA' $false; $x.TextWrapping = 'Wrap'; $x.Margin = '0,8,0,0'
+        $nvPanel.Children.Add($x) | Out-Null
+    }
+    $nvG = @{ Name = 'NVIDIA GeForce'; Checks = @(); Col = '#4ADE80'; Panel = $nvPanel; NoBulk = $true }
+    $nvG.Badge = TB 'setari recomandate' 11 '#8A6A72' $false
+    New-FolderTile $nvG (Emo 0x1F7E2) 'NVIDIA GEFORCE'
 }
 
 # ---------- Benchmark (FPS in joc + test de stres) si Bottleneck ----------
@@ -1287,6 +1364,38 @@ public static class FiveAmBench {
             VirtualFree(buf, UIntPtr.Zero, 0x8000);
             try { System.IO.File.Delete(path); } catch { }
         }
+    }
+}
+
+public static class FiveAmSys {
+    [DllImport("ntdll.dll")]
+    static extern int NtSetTimerResolution(uint desired, [MarshalAs(UnmanagedType.U1)] bool set, out uint current);
+    [DllImport("ntdll.dll")]
+    static extern int NtSetSystemInformation(int cls, ref int info, int len);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool OpenProcessToken(IntPtr h, uint access, out IntPtr token);
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool LookupPrivilegeValueW(string sys, string name, out long luid);
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    struct TokPriv { public int Count; public long Luid; public int Attr; }
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool AdjustTokenPrivileges(IntPtr token, bool disableAll, ref TokPriv state, int len, IntPtr prev, IntPtr ret);
+    [DllImport("kernel32.dll")]
+    static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll")]
+    static extern bool CloseHandle(IntPtr h);
+    // 0.5 ms cat timp ruleaza jocul (la fel face Chrome sau Discord); false = revine la normal. Intoarce rezolutia curenta in ms.
+    public static double Timer(bool on) { uint cur; NtSetTimerResolution(5000, on, out cur); return cur / 10000.0; }
+    // goleste lista "standby" (cache de fisiere) ca ISLC; 0 = reusit
+    public static int PurgeStandby() {
+        IntPtr tok;
+        if (OpenProcessToken(GetCurrentProcess(), 0x28, out tok)) {
+            TokPriv tp = new TokPriv(); tp.Count = 1; tp.Attr = 2;
+            if (LookupPrivilegeValueW(null, "SeProfileSingleProcessPrivilege", out tp.Luid)) AdjustTokenPrivileges(tok, false, ref tp, 0, IntPtr.Zero, IntPtr.Zero);
+            CloseHandle(tok);
+        }
+        int cmd = 4;
+        return NtSetSystemInformation(80, ref cmd, 4);
     }
 }
 
@@ -1548,7 +1657,6 @@ $lastS = @(Get-BenchHistory | Where-Object { $_.Type -eq 'stress' }) | Select-Ob
 if ($lastS) { $stressOut.Text = "Ultimul test de stres ($($lastS.Date)): CPU $([int]$lastS.CpuMulti) puncte, GPU $([int]$lastS.GpuFps) FPS" }
 
 function Set-BenchBusy($on) { $script:bm.Busy = $on; $btnFps.IsEnabled = -not $on; $btnStress.IsEnabled = -not $on; $BtnApply.IsEnabled = -not $on }
-$script:refreshHz = [int](($script:gpuAdapters | Measure-Object CurrentRefreshRate -Maximum).Maximum)
 
 # Test FPS: totul ruleaza in fundal; interfata doar afiseaza starea
 $btnFps.Add_Click({
@@ -1769,9 +1877,22 @@ $gmTimer.Add_Tick({
         $g = Find-Game
         if ($g) {
             $script:gm.Idle = 0
+            if ($script:gm.Active -and $script:gm.Purge -and ((Get-Date) - $script:gm.LastPurge).TotalSeconds -ge 30) {
+                # ca ISLC: doar cand memoria libera scade sub 1 GB si standby are peste 1 GB
+                try {
+                    $pm = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory -ErrorAction Stop
+                    $sb = [double]$pm.StandbyCacheNormalPriorityBytes + [double]$pm.StandbyCacheReserveBytes + [double]$pm.StandbyCacheCoreBytes
+                    if ($pm.FreeAndZeroPageListBytes -lt 1GB -and $sb -gt 1GB) {
+                        Initialize-BenchTypes
+                        if ([FiveAmSys]::PurgeStandby() -eq 0) { Say ("MOD JOC: memorie standby eliberata ({0:N1} GB)" -f ($sb / 1GB)) }
+                        $script:gm.LastPurge = Get-Date
+                    }
+                } catch {}
+            }
             if (-not $script:gm.Active) {
                 $script:gm.Active = $true; $script:gm.Closed = @()
-                try { $g.PriorityClass = 'High' } catch {}
+                if ($script:gm.Prio) { try { $g.PriorityClass = 'High' } catch {} }
+                if ($script:gm.Timer) { try { Initialize-BenchTypes; $tr = [FiveAmSys]::Timer($true); Say ("MOD JOC: timer Windows {0:N1} ms" -f $tr) } catch {} }
                 Say "MOD JOC: joc detectat ($($g.ProcessName)), inchid aplicatiile alese..."
                 foreach ($cb in $script:gmCbs) {
                     if (-not $cb.IsChecked) { continue }
@@ -1790,6 +1911,7 @@ $gmTimer.Add_Tick({
             $script:gm.Idle++
             if ($script:gm.Idle -ge 3) {
                 $script:gm.Active = $false; $script:gm.Idle = 0; $script:gm.Kill = $null
+                if ($script:gm.Timer) { try { [void][FiveAmSys]::Timer($false) } catch {} }
                 foreach ($pa in $script:gm.Closed) { try { Start-Process -FilePath $pa } catch {} }
                 Say 'MOD JOC: joc inchis, am redeschis aplicatiile.'; $script:gm.Closed = @()
             }
@@ -1903,7 +2025,7 @@ $BtnApply.Add_Click({
     $script:applyTimer.Start(); [void]$script:wk.BeginInvoke()
 })
 $BtnRevert.Add_Click({
-    if ($script:bk.Count -eq 0 -and -not (Test-Path $metaFile) -and -not (Test-Path "$bkDir\defender.json")) { Say 'Nu exista nimic de anulat.'; return }
+    if ($script:bk.Count -eq 0 -and -not (Test-Path $metaFile) -and -not (Test-Path "$bkDir\defender.json") -and -not (Test-Path "$bkDir\netadapter.json")) { Say 'Nu exista nimic de anulat.'; return }
     foreach ($e in @($script:bk.Values)) {
         try {
             if ($e.Existed) { Set-ItemProperty -Path $e.Path -Name $e.Name -Value $e.Value -Type $e.Kind -Force }
@@ -1916,6 +2038,15 @@ $BtnRevert.Add_Click({
         try { powercfg /setactive $m.Scheme; Say "UNDO power plan original" } catch {}
         if ($m.Hiber) { powercfg /hibernate on; Say 'UNDO hibernare pornita' }
         Remove-Item $metaFile -Force
+    }
+    $nf = "$bkDir\netadapter.json"
+    if (Test-Path $nf) {
+        try { foreach ($e in @(Get-Content $nf -Raw | ConvertFrom-Json)) {
+                  if ($e.K -eq '#PM') { Set-NetAdapterPowerManagement -Name $e.N -AllowComputerToTurnOffDevice Enabled -NoRestart -ErrorAction SilentlyContinue }
+                  else { Set-NetAdapterAdvancedProperty -Name $e.N -RegistryKeyword $e.K -RegistryValue $e.V -NoRestart -ErrorAction SilentlyContinue }
+                  Say "UNDO placa de retea $($e.N): $($e.K)" }
+              foreach ($n in @(Get-Content $nf -Raw | ConvertFrom-Json | ForEach-Object { $_.N } | Select-Object -Unique)) { Restart-NetAdapter -Name $n -ErrorAction SilentlyContinue }
+              Remove-Item $nf -Force } catch { Say "FAIL undo placa de retea: $($_.Exception.Message)" }
     }
     $df = "$bkDir\defender.json"
     if (Test-Path $df) {
@@ -2120,6 +2251,8 @@ if ($SelfTest) {
         $smp = @(@{ Cpu = 40; Core = 97; Gpu = 60; VU = 7000; VT = 8192; Ram = 50 }, @{ Cpu = 45; Core = 95; Gpu = 62; VU = 7100; VT = 8192; Ram = 52 })
         $bn = Get-Bottleneck $smp 120 240; if ($bn.Kind -ne 'CPU') { $errs += "bottleneck: $($bn.Kind)" }
         Show-Bottleneck $bn 'test'
+        $tr = [FiveAmSys]::Timer($true); [void][FiveAmSys]::Timer($false); if (-not ($tr -gt 0 -and $tr -le 16)) { $errs += "timer: $tr" }
+        [void][FiveAmSys]::PurgeStandby()
     } catch { $errs += "benchmark: $($_.Exception.Message)" }
     Show-Banner 'test' 'ok' 'TEST'
     $out = if ($errs.Count) { @('SELFTEST FAIL') + $errs } else { @("SELFTEST OK - $($script:checks.Count) optimizari, v$AppVersion") }

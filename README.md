@@ -12,7 +12,7 @@ Aplicatie cu interfata grafica (WPF) pentru Windows 11 care dezactiveaza functii
 - **GPU si gaming**: Game Mode, Game DVR oprit, HAGS, mouse fara acceleratie
 - **FPS BOOST**: prioritate pentru jocul din prim-plan, VRR si in jocurile windowed, optimizari jocuri windowed, fara Sticky Keys in jocuri, Game Bar fara popup-uri, fara upload P2P, Nagle oprit, CPU la maxim (optional MPO, timer global, fullscreen optimizations, MSI mode pentru placa video)
 - **Performanta Windows**: meniuri instant, aplicatiile de la pornire fara intarziere, Edge oprit in fundal, efecte vizuale reduse (optional: indexare, SysMain, drivere prin Windows Update)
-- **Retea**: prioritate jocuri (MMCSS), cache DNS golit, DNS Cloudflare optional
+- **Retea**: prioritate jocuri (MMCSS), cache DNS golit, DNS Cloudflare optional, placa de retea fara economie de energie (optional)
 - **Curatenie disc**: cache shadere, Windows Update, browsere, Windows.old (optional)
 - **Servicii**: telemetrie oprita, servicii rar folosite pe Manual
 - **Securitate (optional)**: Memory Integrity, VBS, excluderi Windows Defender pentru folderele cu jocuri
@@ -22,8 +22,8 @@ Aplicatie cu interfata grafica (WPF) pentru Windows 11 care dezactiveaza functii
 
 - **Manager pornire**: alegi ce porneste odata cu Windows (ca in Task Manager)
 - **GPU pentru jocuri**: pui jocurile pe placa video dedicata (Performanta inalta)
-- **Mod joc**: cand pornesti un joc inchide aplicatiile alese si le redeschide dupa
-- **AMD Radeon Adrenalin**: setarile recomandate, apare doar daca ai placa AMD
+- **Mod joc**: cand pornesti un joc inchide aplicatiile alese si le redeschide dupa; optional timer 0.5 ms, curatarea memoriei standby (ca ISLC) si prioritate mare pentru joc
+- **AMD Radeon Adrenalin** / **NVIDIA GeForce**: setarile recomandate in driver, apar dupa placa ta video
 - **Comparatie inainte / dupa**: dupa restart vezi timpul de pornire, RAM, procese, programe la pornire
 
 ### Benchmark si bottleneck
@@ -75,6 +75,10 @@ powershell -ExecutionPolicy Bypass -File .\5AMOptimizer.ps1
 La pornire, aplicatia verifica ultimul release de pe GitHub. Varianta `.exe` descarca singura versiunea noua, verifica suma SHA256 si se reporneste actualizata. Varianta `.ps1` doar te anunta ca exista o versiune noua.
 
 Pentru a opri actualizarea automata, creeaza fisierul gol `%APPDATA%\WinGameOptimizer\noautoupdate.txt`. Aplicatia va afisa atunci doar un buton **ACTUALIZEAZA**.
+
+## Siguranta si anti-cheat
+
+Aplicatia nu citeste, nu scrie si nu injecteaza nimic in procesele jocurilor. Toate optimizarile sunt setari Windows / driver, la fel ca cele facute manual din Setari. Masurarea FPS foloseste PresentMon (evenimente Windows ETW), fara acces la joc. Singura optiune care atinge procesul jocului este "Prioritate mare pentru procesul jocului" din Mod joc, oprita implicit.
 
 ## Siguranta si revenire
 
