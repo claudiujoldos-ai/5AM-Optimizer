@@ -66,7 +66,11 @@ function Remove-AppPkg {
 # ---------- Detectie placi video (AMD / NVIDIA / Intel) ----------
 $script:gpuAdapters = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -and $_.Name -notmatch 'Basic|Remote|Virtual|Parsec|Mirage|Indirect|Meta' })
-$gpuVendors = @($script:gpuAdapters | ForEach-Object {
+# grafica integrata din procesor (Ryzen "Radeon(TM) Graphics", Intel UHD/Iris) nu conteaza daca exista o placa dedicata
+$igpuRx = 'Radeon\(TM\) Graphics$|Radeon Graphics$|Vega \d+ Graphics|Intel.*(UHD|Iris|HD Graphics)'
+$gpuMain = @($script:gpuAdapters | Where-Object { $_.Name -notmatch $igpuRx })
+if ($gpuMain.Count -eq 0) { $gpuMain = $script:gpuAdapters }
+$gpuVendors = @($gpuMain | ForEach-Object {
     if ($_.Name -match 'AMD|Radeon|ATI') { 'AMD' } elseif ($_.Name -match 'NVIDIA|GeForce|RTX|GTX|Quadro') { 'NVIDIA' } elseif ($_.Name -match 'Intel') { 'INTEL' } })
 
 # ---------- Optimizari (P = profilul minim care le include: 1 Minim, 2 Mediu, 3 Maxim) ----------
