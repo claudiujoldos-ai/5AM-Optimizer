@@ -164,6 +164,27 @@ $tweaks = @(
     Remove-Item "$env:TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item "$env:WINDIR\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue }},
 
+ @{G='PERFORMANTA WINDOWS'; P=2; I='26A1'; L='Meniuri si previzualizari instant'; T='Meniurile se deschid fara pauza de 400 ms, iar previzualizarile din taskbar apar imediat. Dupa relogare.'; Do={
+    RegSet 'HKCU:\Control Panel\Desktop' 'MenuShowDelay' '0' 'String'
+    RegSet 'HKCU:\Control Panel\Mouse' 'MouseHoverTime' '10' 'String' }},
+ @{G='PERFORMANTA WINDOWS'; P=2; I='1F680'; L='Aplicatiile de la pornire fara intarziere'; T='Windows asteapta cateva secunde dupa logare inainte sa porneasca aplicatiile din Startup. Asta scoate asteptarea.'; Do={
+    $k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize'
+    RegSet $k 'StartupDelayInMSec' 0; RegSet $k 'WaitForIdleState' 0 }},
+ @{G='PERFORMANTA WINDOWS'; P=2; I='1F310'; L='Edge nu mai ruleaza in fundal'; T='Opreste Startup Boost si rularea in fundal dupa ce inchizi Edge: mai putin RAM si CPU folosit degeaba.'; Do={
+    $k = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
+    RegSet $k 'StartupBoostEnabled' 0; RegSet $k 'BackgroundModeEnabled' 0 }},
+ @{G='PERFORMANTA WINDOWS'; P=9; NoStar=$true; I='23F3'; L='Optional: aplicatiile blocate se inchid mai repede'; T='Aplicatiile care nu raspund se inchid dupa 2 secunde, inclusiv la oprirea PC-ului. Atentie: poti pierde ce nu ai salvat.'; Do={
+    $k = 'HKCU:\Control Panel\Desktop'
+    RegSet $k 'AutoEndTasks' '1' 'String'; RegSet $k 'HungAppTimeout' '2000' 'String'; RegSet $k 'WaitToKillAppTimeout' '2000' 'String' }},
+ @{G='PERFORMANTA WINDOWS'; P=9; NoStar=$true; I='1F50D'; L='Optional: indexarea cautarii oprita'; T='Serviciul Windows Search nu mai scaneaza discurile in fundal. Cautarea in Start si Explorer devine mai lenta.'; Do={
+    if (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WSearch') { RegSet 'HKLM:\SYSTEM\CurrentControlSet\Services\WSearch' 'Start' 4 }
+    Stop-Service WSearch -Force -ErrorAction SilentlyContinue }},
+ @{G='PERFORMANTA WINDOWS'; P=9; NoStar=$true; I='1F4BE'; L='Optional: SysMain (Superfetch) oprit'; T='Opreste preincarcarea aplicatiilor in RAM. Pe SSD castigul de viteza e mic, dar scade activitatea pe disc si RAM-ul ocupat.'; Do={
+    if (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Services\SysMain') { RegSet 'HKLM:\SYSTEM\CurrentControlSet\Services\SysMain' 'Start' 4 }
+    Stop-Service SysMain -Force -ErrorAction SilentlyContinue }},
+ @{G='PERFORMANTA WINDOWS'; P=9; NoStar=$true; I='1F6E0'; L='Optional: fara drivere prin Windows Update'; T='Windows Update nu mai inlocuieste driverul placii video (sau alte drivere) cu versiuni proprii. Driverele le instalezi tu de la producator.'; Do={
+    RegSet 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate' 'ExcludeWUDriversInQualityUpdate' 1 }},
+
  @{G='RETEA'; P=2; L='Prioritate jocuri in Windows (MMCSS: GPU/CPU pentru jocuri, fara limitare retea)'; Do={
     $sp = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
     RegSet $sp 'SystemResponsiveness' 10
@@ -229,6 +250,19 @@ $tweaks = @(
     foreach ($na in @(Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' })) {
         $kk = "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$($na.InterfaceGuid)"
         RegSet $kk 'TcpAckFrequency' 1; RegSet $kk 'TCPNoDelay' 1 } }},
+ @{G='FPS BOOST'; P=2; I='1F3AF'; L='Prioritate pentru jocul din prim-plan'; T='Fereastra activa (jocul) primeste felii de timp CPU mai lungi decat aplicatiile din fundal. Win32PrioritySeparation = 38.'; Do={
+    RegSet 'HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl' 'Win32PrioritySeparation' 38 }},
+ @{G='FPS BOOST'; P=2; I='1F4C8'; L='Variable Refresh Rate si in jocurile windowed'; T='FreeSync / G-Sync functioneaza si in jocurile care nu au suport VRR propriu: mai putin tearing si stutter. Ai nevoie de monitor cu VRR.'; Do={
+    $kk = 'HKCU:\Software\Microsoft\DirectX\UserGpuPreferences'
+    $cur = ''; try { $cur = [string](Get-ItemProperty -Path $kk -Name DirectXUserGlobalSettings -ErrorAction Stop).DirectXUserGlobalSettings } catch {}
+    if ($cur -and -not $cur.EndsWith(';')) { $cur += ';' }
+    if ($cur -match 'VRROptimizeEnable=\d') { $new = $cur -replace 'VRROptimizeEnable=\d', 'VRROptimizeEnable=1' }
+    else { $new = $cur + 'VRROptimizeEnable=1;' }
+    RegSet $kk 'DirectXUserGlobalSettings' $new 'String' }},
+ @{G='FPS BOOST'; P=2; I='2328'; L='Fara Sticky Keys / Filter Keys in jocuri'; T='Apasarea repetata pe Shift sau tinerea lui apasat nu mai deschide fereastra Sticky Keys peste joc.'; Do={
+    RegSet 'HKCU:\Control Panel\Accessibility\StickyKeys' 'Flags' '506' 'String'
+    RegSet 'HKCU:\Control Panel\Accessibility\Keyboard Response' 'Flags' '122' 'String'
+    RegSet 'HKCU:\Control Panel\Accessibility\ToggleKeys' 'Flags' '58' 'String' }},
  @{G='FPS BOOST'; NoStar=$true; P=9; I='1F9EA'; L='Optional: MPO oprit (flicker / stutter)'; T='Opreste Multiplane Overlay. Foloseste-l DOAR daca ai flicker, ecran negru scurt sau stutter. Necesita restart.'; Do={
     RegSet 'HKLM:\SOFTWARE\Microsoft\Windows\Dwm' 'OverlayTestMode' 5 }},
  @{G='FPS BOOST'; NoStar=$true; P=9; I='23F1'; L='Optional: timer global Windows 11'; T='Restaureaza comportamentul vechi al timerului: frametime mai stabil in unele jocuri, dar consum mai mare.'; Do={
@@ -580,9 +614,33 @@ function Get-GpuInfo {
         if ($mt) { $vtxt += " $mt" }
         $drv = "driver $($a.DriverVersion)"
         if ($adr) { $drv += " (Adrenalin $adr)" }
+        if ($a.DriverDate) { try { $drv += ", din $(([datetime]$a.DriverDate).ToString('yyyy-MM-dd'))" } catch {} }
         $res = ''
         if ($a.CurrentHorizontalResolution) { $res = "$($a.CurrentHorizontalResolution)x$($a.CurrentVerticalResolution) @ $($a.CurrentRefreshRate) Hz" }
-        $lines = @($a.Name, "$vtxt  |  $drv", $res) | Where-Object { $_ }
+        # chip, BIOS placa video
+        $chip = ''; $bios = ''
+        if ($r) {
+            $chip = Rs $r.'HardwareInformation.ChipType'; if ($chip -notmatch '^[\x20-\x7E]{2,60}$') { $chip = '' }
+            $bios = Rs $r.'HardwareInformation.BiosString'; if ($bios -notmatch '^[\x20-\x7E]{2,80}$') { $bios = '' }
+        }
+        $hw = @($(if ($chip) { "chip $chip" }), $(if ($bios) { "BIOS $bios" })) | Where-Object { $_ }
+        # PCIe: generatia si latimea (curent / maxim)
+        $pcie = ''
+        try {
+            $gen = @{ 1 = '1.0'; 2 = '2.0'; 3 = '3.0'; 4 = '4.0'; 5 = '5.0'; 6 = '6.0' }
+            $pp = @{}
+            foreach ($k in 'CurrentLinkSpeed', 'CurrentLinkWidth', 'MaxLinkSpeed', 'MaxLinkWidth') {
+                $pp[$k] = (Get-PnpDeviceProperty -InstanceId $a.PNPDeviceID -KeyName "DEVPKEY_PciDevice_$k" -ErrorAction Stop).Data
+            }
+            if ($pp.MaxLinkWidth) {
+                $pcie = "PCIe $($gen[[int]$pp.CurrentLinkSpeed]) x$($pp.CurrentLinkWidth)"
+                if ($pp.CurrentLinkSpeed -ne $pp.MaxLinkSpeed -or $pp.CurrentLinkWidth -ne $pp.MaxLinkWidth) {
+                    $pcie += " (maxim $($gen[[int]$pp.MaxLinkSpeed]) x$($pp.MaxLinkWidth); in idle placa poate cobori singura viteza)"
+                }
+            }
+        } catch {}
+        $kind = $(if ($a.Name -match $igpuRx) { '  [integrata in procesor]' } else { '' })
+        $lines = @(($a.Name + $kind), "$vtxt  |  $drv", ($hw -join '  |  '), $pcie, $res) | Where-Object { $_ }
         $out += [pscustomobject]@{ Name = $a.Name; VramMB = [int]($vram / 1MB); Text = ($lines -join "`n") }
     }
     $out
@@ -656,8 +714,11 @@ $worker = [powershell]::Create(); $worker.Runspace = $rs
             $d.Tot = $os.TotalVisibleMemorySize / 1MB; $d.Use = $d.Tot - $os.FreePhysicalMemory / 1MB
             $d.Gpu = $null
             if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
-                try { $q = & nvidia-smi --query-gpu=utilization.gpu,temperature.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>$null
-                      if ($q) { $p = (@($q)[0]) -split ',\s*'; $d.Gpu = @{ Load = [int]$p[0]; Temp = [int]$p[1]; MU = [int]$p[2]; MT = [int]$p[3] } } } catch {}
+                try { $q = & nvidia-smi --query-gpu=utilization.gpu,temperature.gpu,memory.used,memory.total,clocks.gr,clocks.mem,power.draw,fan.speed --format=csv,noheader,nounits 2>$null
+                      if ($q) { $p = (@($q)[0]) -split ',\s*'
+                                $num = { param($x) $v = 0.0; if ([double]::TryParse(([string]$x).Trim(), [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$v)) { $v } else { $null } }
+                                $d.Gpu = @{ Load = [int]$p[0]; Temp = [int]$p[1]; MU = [int]$p[2]; MT = [int]$p[3]
+                                            Clk = (& $num $p[4]); MClk = (& $num $p[5]); Pw = (& $num $p[6]); Fan = (& $num $p[7]); FanU = '%' } } } catch {}
             }
             if (-not $d.Gpu) {
                 # AMD / Intel: contoare Windows (Task Manager). Alege placa cu cea mai multa memorie dedicata folosita.
@@ -693,6 +754,32 @@ $worker = [powershell]::Create(); $worker.Runspace = $rs
                           if ($gt) { $d.Gpu.Temp = [int]$gt.Value; break } } catch {}
                 }
             }
+            # Frecvente, consum si ventilator pe AMD / Intel (sau ce lipseste pe NVIDIA): din LibreHardwareMonitor, daca ruleaza
+            if ($d.Gpu -and ($null -eq $d.Gpu.Clk -or $null -eq $d.Gpu.Pw -or $null -eq $d.Gpu.Fan)) {
+                foreach ($ns in 'root/LibreHardwareMonitor', 'root/OpenHardwareMonitor') {
+                    try {
+                        $all = @(Get-CimInstance -Namespace $ns -ClassName Sensor -ErrorAction Stop | Where-Object { $_.Identifier -match '^/gpu' })
+                        if (-not $all.Count) { continue }
+                        # placa cea mai incarcata (nu grafica integrata, daca exista una dedicata)
+                        $grp = $all | Group-Object { ($_.Identifier -split '/')[1..2] -join '/' } | Sort-Object {
+                            $l = $_.Group | Where-Object { $_.SensorType -eq 'Load' -and $_.Name -eq 'GPU Core' } | Select-Object -First 1
+                            $m = $_.Group | Where-Object { $_.SensorType -eq 'SmallData' -and $_.Name -match 'Memory Total|Dedicated Memory Total' } | Select-Object -First 1
+                            [double]$(if ($m) { $m.Value } else { 0 }) * 1000 + [double]$(if ($l) { $l.Value } else { 0 })
+                        } -Descending | Select-Object -First 1
+                        $sg = $grp.Group
+                        $pick = { param($type, $rx) $sg | Where-Object { $_.SensorType -eq $type -and $_.Name -match $rx } | Select-Object -First 1 }
+                        if ($null -eq $d.Gpu.Clk) { $x = & $pick 'Clock' 'Core'; if ($x) { $d.Gpu.Clk = [double]$x.Value } }
+                        if ($null -eq $d.Gpu.MClk) { $x = & $pick 'Clock' 'Memory'; if ($x) { $d.Gpu.MClk = [double]$x.Value } }
+                        if ($null -eq $d.Gpu.Pw) { $x = & $pick 'Power' 'Package|Total|Board|GPU Power|Core'; if ($x) { $d.Gpu.Pw = [double]$x.Value } }
+                        if ($null -eq $d.Gpu.Fan) {
+                            $x = & $pick 'Control' 'Fan'
+                            if ($x) { $d.Gpu.Fan = [double]$x.Value; $d.Gpu.FanU = '%' }
+                            else { $x = & $pick 'Fan' '.'; if ($x) { $d.Gpu.Fan = [double]$x.Value; $d.Gpu.FanU = ' RPM' } }
+                        }
+                        break
+                    } catch {}
+                }
+            }
             foreach ($k in @($d.Keys)) { $sd[$k] = $d[$k] }
             $sd['Ready'] = $true
         } catch {}
@@ -715,6 +802,13 @@ function Update-Live {
         $gtxt = if ($null -ne $g.Temp) { "$($g.Temp) C" } else { 'n/a (porneste LibreHardwareMonitor)' }
         $gvr = if ($g.MT) { "$($g.MU)/$($g.MT) MB" } else { "$($g.MU) MB" }
         $ui.GPU.L = "Load $($g.Load)%   Temp $gtxt   VRAM $gvr"
+        $ex = @()
+        if ($null -ne $g.Clk)  { $ex += "Core $([int]$g.Clk) MHz" }
+        if ($null -ne $g.MClk) { $ex += "Memorie $([int]$g.MClk) MHz" }
+        if ($null -ne $g.Pw)   { $ex += "Consum $([int]$g.Pw) W" }
+        if ($null -ne $g.Fan)  { $ex += "Ventilator $([int]$g.Fan)$($g.FanU)" }
+        if ($ex.Count) { $ui.GPU.L += "`n" + ($ex -join '   ') }
+        elseif ($g.Temp -eq $null) { $ui.GPU.L += "`nFrecvente, consum, ventilator: porneste LibreHardwareMonitor ca administrator" }
     } else { $ui.GPU.V.Text = 'n/a'; $ui.GPU.L = 'Load/Temp indisponibile pe acest GPU' }
     $msg = 'Nicio limitare acum. Ruleaza un joc si uita-te aici pentru un test real.'; $short = 'OK'
     if ($g -and $cpu -ge 85 -and $g.Load -lt 70)      { $msg = "BOTTLENECK CPU: procesorul ($cpu%) tine placa video la $($g.Load)%."; $short = 'BOTTLENECK CPU' }

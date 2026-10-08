@@ -1,8 +1,9 @@
 5AM Optimizer v1.1.0
-- Interfata cu foldere pe sectiuni si splash cu logo
+- Interfata cu foldere pe sectiuni, splash si iconita cu logo-ul 5AM
 - Manager pornire, GPU pentru jocuri, Mod joc, comparatie inainte/dupa restart
-- Curatenie disc, servicii, retea (DNS, prioritate jocuri)
-- FPS BOOST: Game Bar, jocuri windowed, Delivery Optimization, Nagle, CPU, optionale MPO / timer / fullscreen
-- Placa video detectata mai bine: VRAM, driver, Adrenalin, load si temperatura si pe AMD / Intel
-- Folder AMD Radeon cu setarile recomandate in Adrenalin
+- Placa video: VRAM, driver, Adrenalin, chip, BIOS, PCIe, frecvente, consum, ventilator (AMD, NVIDIA, Intel)
+- FPS BOOST nou: prioritate pentru jocul din prim-plan, VRR in jocurile windowed, fara Sticky Keys in jocuri
+- Windows mai fluid: meniuri instant, pornire fara intarziere, Edge oprit in fundal
+- Optionale: indexare, SysMain, drivere prin Windows Update, inchidere rapida aplicatii blocate
+- Folder AMD Radeon cu setarile recomandate in Adrenalin (doar pe placi AMD dedicate)
 - Actualizare automata din aplicatie

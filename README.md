@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/icon.png" width="220" alt="5AM Optimizer"></p>
+
 # 5AM Optimizer - Gaming Edition
 
 Aplicatie cu interfata grafica (WPF) pentru Windows 11 care dezactiveaza functiile AI / Copilot, reduce telemetria si aplica optimizari pentru gaming.
@@ -8,7 +10,8 @@ Aplicatie cu interfata grafica (WPF) pentru Windows 11 care dezactiveaza functii
 - **Privacy**: fara ID de reclame, Timeline, locatie, feedback, tracking in Start, Spotlight pe lockscreen
 - **Power plan**: Ultimate Performance, PCIe / USB suspend oprite, hibernare oprita, Power Throttling oprit
 - **GPU si gaming**: Game Mode, Game DVR oprit, HAGS, mouse fara acceleratie
-- **FPS BOOST**: Game Bar fara popup-uri, optimizari jocuri windowed, fara upload P2P, Nagle oprit, CPU la maxim (optional MPO, timer global, fullscreen optimizations)
+- **FPS BOOST**: prioritate pentru jocul din prim-plan, VRR si in jocurile windowed, optimizari jocuri windowed, fara Sticky Keys in jocuri, Game Bar fara popup-uri, fara upload P2P, Nagle oprit, CPU la maxim (optional MPO, timer global, fullscreen optimizations)
+- **Performanta Windows**: meniuri instant, aplicatiile de la pornire fara intarziere, Edge oprit in fundal, efecte vizuale reduse (optional: indexare, SysMain, drivere prin Windows Update)
 - **Retea**: prioritate jocuri (MMCSS), cache DNS golit, DNS Cloudflare optional
 - **Curatenie disc**: cache shadere, Windows Update, browsere, Windows.old (optional)
 - **Servicii**: telemetrie oprita, servicii rar folosite pe Manual
@@ -24,7 +27,7 @@ Aplicatie cu interfata grafica (WPF) pentru Windows 11 care dezactiveaza functii
 
 ### Dashboard hardware
 
-CPU, GPU (AMD / NVIDIA / Intel: VRAM, driver, load, temperatura), RAM, discuri, analiza de bottleneck si sfaturi rapide (XMP, Hz monitor, Resizable BAR, driver vechi, TRIM). Apasa pe un chip ca sa vezi detaliile.
+CPU, GPU (AMD / NVIDIA / Intel: VRAM, driver si Adrenalin, chip, BIOS, PCIe, load, temperatura, frecvente, consum, ventilator), RAM, discuri, analiza de bottleneck si sfaturi rapide (XMP, Hz monitor, Resizable BAR, driver vechi, TRIM). Apasa pe un chip ca sa vezi detaliile.
 
 ## Selectie
 
@@ -82,7 +85,7 @@ Pentru a opri actualizarea automata, creeaza fisierul gol `%APPDATA%\WinGameOpti
 
 ## Temperaturi CPU / GPU
 
-Pentru citirea temperaturilor porneste [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) in fundal. Pe placile NVIDIA datele vin direct din `nvidia-smi`.
+Pentru temperaturi, frecvente, consum si ventilator pe AMD / Intel porneste [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) in fundal. Pe placile NVIDIA datele vin direct din `nvidia-smi`.
 
 ## Cerinte
 
