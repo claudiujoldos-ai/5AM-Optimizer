@@ -914,7 +914,8 @@ if ($SelfTest) {
     Show-Banner 'test' 'ok' 'TEST'
     $out = if ($errs.Count) { @('SELFTEST FAIL') + $errs } else { @("SELFTEST OK - $($script:checks.Count) optimizari, v$AppVersion") }
     Set-Content -Path (Join-Path $env:TEMP '5am_selftest.txt') -Value $out
-    exit $(if ($errs.Count) { 1 } else { 0 })
+    try { $worker.Stop() } catch {}
+    [Environment]::Exit($(if ($errs.Count) { 1 } else { 0 }))
 }
 if (-not $SelfTest) { Start-UpdateCheck }
 
@@ -922,3 +923,4 @@ Select-Profile 2
 Say 'Alege LOW sau ULTRA (sau ajusteaza manual), apoi apasa OPTIMIZEAZA.'
 $w.ShowDialog() | Out-Null
 try { $worker.Stop(); $rs.Close() } catch {}
+[Environment]::Exit(0)

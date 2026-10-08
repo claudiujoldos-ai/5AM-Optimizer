@@ -11,6 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -54,8 +55,10 @@ jobs:
         shell: powershell
         run: |
           Remove-Item "$env:TEMP\5am_selftest.txt" -ErrorAction SilentlyContinue
-          $p = Start-Process .\5AMOptimizer.exe -ArgumentList '-SelfTest' -Wait -PassThru
-          if (Test-Path "$env:TEMP\5am_selftest.txt") { Get-Content "$env:TEMP\5am_selftest.txt" }
+          $p = Start-Process .\5AMOptimizer.exe -ArgumentList '-SelfTest' -PassThru
+          $done = $p.WaitForExit(90000)
+          if (Test-Path "$env:TEMP\5am_selftest.txt") { Get-Content "$env:TEMP\5am_selftest.txt" } else { 'Nu exista fisier de rezultat' }
+          if (-not $done) { try { $p.Kill() } catch {}; throw 'Testul exe nu s-a terminat in 90 secunde' }
           if ($p.ExitCode -ne 0) { throw "Testul exe a esuat (cod $($p.ExitCode))" }
 
       - name: Suma de control SHA256
