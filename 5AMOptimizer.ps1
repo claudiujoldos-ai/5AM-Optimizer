@@ -1969,7 +1969,7 @@ function Finish-Bench {
     $now = (Get-Date).ToString('yyyy-MM-dd HH:mm')
     if ($script:bm.Stage -eq 'error') {
         $msg = "Testul nu a reusit: $($script:bm.Err)"
-        if ($script:pr.Waiting) { $script:pr.Waiting = $false; if ($script:prStatus) { $script:prStatus.Text = $msg } }
+        if ($script:proof.Waiting) { $script:proof.Waiting = $false; if ($script:prStatus) { $script:prStatus.Text = $msg } }
         if ($script:bm.Kind -eq 'fps') { $fpsOut.Text = $msg } else { $stressOut.Text = $msg }
         Say "BENCHMARK: $msg"
     } elseif ($script:bm.Kind -eq 'fps') {
@@ -2023,7 +2023,7 @@ $bmTimer.Add_Tick({
         $st = [string]$script:bm.Stage
         if ($script:bm.Pct) { $bmBar.Value = [int]$script:bm.Pct }
         $m = [string]$script:bm.Msg
-        if ($script:bm.Kind -eq 'fps') { if ($st -notin 'done', 'error') { $fpsOut.Text = $m; if ($script:pr.Waiting -and $script:prStatus) { $script:prStatus.Text = $m } } } else { if ($st -notin 'stress-done', 'error') { $stressOut.Text = $m } }
+        if ($script:bm.Kind -eq 'fps') { if ($st -notin 'done', 'error') { $fpsOut.Text = $m; if ($script:proof.Waiting -and $script:prStatus) { $script:prStatus.Text = $m } } } else { if ($st -notin 'stress-done', 'error') { $stressOut.Text = $m } }
         if ($st -eq 'gpu-start') { Start-GpuStress; return }
         if ($st -eq 'gpu') {
             $left = [int](20 - $script:gpuSt.Seconds)
@@ -2042,16 +2042,16 @@ New-FolderTile $botG (Emo 0x1F6A7) 'BOTTLENECK'
 
 # ---------- DOVADA 5AM: test inainte -> optimizare -> restart -> test dupa, plus card de impartasit ----------
 $proofFile = "$bkDir\proof.json"
-$script:pr = @{ Stage = 'none'; App = ''; Before = $null; After = $null; Boot = ''; Waiting = $false }
+$script:proof = @{ Stage = 'none'; App = ''; Before = $null; After = $null; Boot = ''; Waiting = $false }
 try { if (Test-Path $proofFile) { $j = Get-Content $proofFile -Raw | ConvertFrom-Json
-      foreach ($pn in 'Stage', 'App', 'Boot') { if ($j.$pn) { $script:pr[$pn] = [string]$j.$pn } }
-      foreach ($pn in 'Before', 'After') { if ($j.$pn) { $script:pr[$pn] = @{ Avg = [double]$j.$pn.Avg; Low1 = [double]$j.$pn.Low1; Low01 = [double]$j.$pn.Low01; Date = [string]$j.$pn.Date } } } } } catch {}
+      foreach ($pn in 'Stage', 'App', 'Boot') { if ($j.$pn) { $script:proof[$pn] = [string]$j.$pn } }
+      foreach ($pn in 'Before', 'After') { if ($j.$pn) { $script:proof[$pn] = @{ Avg = [double]$j.$pn.Avg; Low1 = [double]$j.$pn.Low1; Low01 = [double]$j.$pn.Low01; Date = [string]$j.$pn.Date } } } } } catch {}
 function Save-Proof {
     if (-not (Test-Path $bkDir)) { New-Item $bkDir -ItemType Directory -Force | Out-Null }
-    @{ Stage = $script:pr.Stage; App = $script:pr.App; Before = $script:pr.Before; After = $script:pr.After; Boot = $script:pr.Boot } | ConvertTo-Json -Depth 4 | Set-Content $proofFile -Encoding UTF8
+    @{ Stage = $script:proof.Stage; App = $script:proof.App; Before = $script:proof.Before; After = $script:proof.After; Boot = $script:proof.Boot } | ConvertTo-Json -Depth 4 | Set-Content $proofFile -Encoding UTF8
 }
 function Get-LastBoot { try { (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('yyyy-MM-dd HH:mm:ss') } catch { '' } }
-if ($script:pr.Stage -eq 'optimized' -and $script:pr.Boot -and (Get-LastBoot) -ne $script:pr.Boot) { $script:pr.Stage = 'restarted'; Save-Proof }
+if ($script:proof.Stage -eq 'optimized' -and $script:proof.Boot -and (Get-LastBoot) -ne $script:proof.Boot) { $script:proof.Stage = 'restarted'; Save-Proof }
 
 # Cardul de impartasit (1200x630, PNG), in culorile temei
 $script:cardXaml = @'
@@ -2128,7 +2128,7 @@ $proofPanel = New-Object Windows.Controls.StackPanel
 $proofG = @{ Name = 'Dovada 5AM'; Checks = @(); Col = '#4ADE80'; Panel = $proofPanel; NoBulk = $true }
 $proofG.Badge = TB '' 11 '#8A6A72' $false
 $script:prCard = $null
-function Start-ProofTest { if ($script:bm.Busy) { return }; $script:pr.Waiting = $true; $btnFps.RaiseEvent((New-Object Windows.RoutedEventArgs([Windows.Controls.Primitives.ButtonBase]::ClickEvent))) }
+function Start-ProofTest { if ($script:bm.Busy) { return }; $script:proof.Waiting = $true; $btnFps.RaiseEvent((New-Object Windows.RoutedEventArgs([Windows.Controls.Primitives.ButtonBase]::ClickEvent))) }
 function Add-ProofStep($n, $title, $desc, $state, $btnText, $action) {
     $bd = New-Object Windows.Controls.Border; $bd.CornerRadius = 12; $bd.Padding = '14,10'; $bd.Margin = '0,0,0,8'; $bd.BorderThickness = 1
     $bd.Background = Br $(if ($state -eq 'now') { '#2A0812' } else { '#120609' }); $bd.BorderBrush = Br $(if ($state -eq 'now') { '#FF2E4D' } elseif ($state -eq 'done') { '#2E5E3E' } else { '#34101A' })
@@ -2150,56 +2150,56 @@ function Add-ProofStep($n, $title, $desc, $state, $btnText, $action) {
 }
 function Update-ProofPanel {
     $proofPanel.Children.Clear()
-    $st = $script:pr.Stage
+    $st = $script:proof.Stage
     $intro = TB 'Arata, cu cifre reale, cat ai castigat dupa optimizare. Fa testele in acelasi joc, in acelasi loc si cu aceleasi setari grafice, ca rezultatul sa fie corect.' 11 '#FF7A93' $false
     $intro.TextWrapping = 'Wrap'; $intro.Margin = '0,0,0,10'; $proofPanel.Children.Add($intro) | Out-Null
-    $b = $script:pr.Before
+    $b = $script:proof.Before
     $s1 = $(if ($st -eq 'none') { 'now' } else { 'done' })
     $s2 = $(if ($st -eq 'before') { 'now' } elseif ($st -in 'optimized', 'restarted', 'done') { 'done' } else { 'later' })
     $s3 = $(if ($st -eq 'optimized') { 'now' } elseif ($st -in 'restarted', 'done') { 'done' } else { 'later' })
     $s4 = $(if ($st -eq 'restarted') { 'now' } elseif ($st -eq 'done') { 'done' } else { 'later' })
-    Add-ProofStep 1 'Test FPS inainte de optimizare' $(if ($b) { ('{0}: {1:N0} FPS mediu, 1% low {2:N0}' -f $script:pr.App, $b.Avg, $b.Low1) } else { 'Porneste testul, intra in joc in 10 secunde si joaca normal.' }) $s1 'PORNESTE TESTUL' { Start-ProofTest }
+    Add-ProofStep 1 'Test FPS inainte de optimizare' $(if ($b) { ('{0}: {1:N0} FPS mediu, 1% low {2:N0}' -f $script:proof.App, $b.Avg, $b.Low1) } else { 'Porneste testul, intra in joc in 10 secunde si joaca normal.' }) $s1 'PORNESTE TESTUL' { Start-ProofTest }
     Add-ProofStep 2 'Optimizeaza' 'Alege optimizarile (sau lasa-le pe cele cu steluta) si apasa OPTIMIZEAZA. Pasul se bifeaza singur.' $s2 'MERGI LA OPTIMIZARI' { Close-Group }
     Add-ProofStep 3 'Reporneste PC-ul' 'Unele optimizari se aplica abia dupa restart. Dupa repornire deschide aplicatia: pasul se bifeaza singur.' $s3 'REPORNESTE ACUM' {
         $r = [Windows.MessageBox]::Show('Repornesc PC-ul acum? Salveaza-ti munca inainte.', '5AM Optimizer', 'YesNo', 'Question')
         if ($r -eq 'Yes') { Restart-Computer -Force } }
-    Add-ProofStep 4 'Test FPS dupa optimizare' $(if ($script:pr.After) { ('{0:N0} FPS mediu, 1% low {1:N0}' -f $script:pr.After.Avg, $script:pr.After.Low1) } else { "Acelasi joc ($($script:pr.App)), acelasi loc si aceleasi setari." }) $s4 'PORNESTE TESTUL' { Start-ProofTest }
+    Add-ProofStep 4 'Test FPS dupa optimizare' $(if ($script:proof.After) { ('{0:N0} FPS mediu, 1% low {1:N0}' -f $script:proof.After.Avg, $script:proof.After.Low1) } else { "Acelasi joc ($($script:proof.App)), acelasi loc si aceleasi setari." }) $s4 'PORNESTE TESTUL' { Start-ProofTest }
     if ($st -eq 'optimized') { $sk = TB 'Nu vrei restart? Poti testa si acum, dar unele optimizari nu vor fi inca active.' 11 '#8A6A72' $false; $sk.Margin = '4,0,0,6'; $sk.TextWrapping = 'Wrap'; $sk.Cursor = [Windows.Input.Cursors]::Hand
-        $sk.TextDecorations = [Windows.TextDecorations]::Underline; $sk.Add_MouseLeftButtonUp({ $script:pr.Stage = 'restarted'; Save-Proof; Update-ProofPanel }); $proofPanel.Children.Add($sk) | Out-Null }
+        $sk.TextDecorations = [Windows.TextDecorations]::Underline; $sk.Add_MouseLeftButtonUp({ $script:proof.Stage = 'restarted'; Save-Proof; Update-ProofPanel }); $proofPanel.Children.Add($sk) | Out-Null }
     $script:prStatus = TB '' 12 '#FFE4EA' $true; $script:prStatus.Margin = '0,6,0,6'; $script:prStatus.TextWrapping = 'Wrap'; $proofPanel.Children.Add($script:prStatus) | Out-Null
-    if ($st -eq 'done' -and $script:pr.Before -and $script:pr.After) {
+    if ($st -eq 'done' -and $script:proof.Before -and $script:proof.After) {
         try {
-            $script:prCard = New-ShareCard $script:pr.App $script:pr.Before $script:pr.After
+            $script:prCard = New-ShareCard $script:proof.App $script:proof.Before $script:proof.After
             $im = New-Object Windows.Controls.Image; $im.Source = $script:prCard; $im.Width = 600; $im.HorizontalAlignment = 'Left'; $im.Margin = '0,4,0,10'
             [Windows.Media.RenderOptions]::SetBitmapScalingMode($im, [Windows.Media.BitmapScalingMode]::HighQuality)
             $proofPanel.Children.Add($im) | Out-Null
         } catch { $script:prStatus.Text = "Nu am putut genera cardul: $($_.Exception.Message)" }
         $row = New-Object Windows.Controls.WrapPanel
         $b1 = New-PillBtn 'SALVEAZA IMAGINEA'; $b1.Margin = '0,0,10,10'
-        $b1.Add_Click({ try { $f = Save-Card $script:prCard $script:pr.App; Say "Card salvat: $f"; Start-Process explorer.exe "/select,`"$f`"" } catch { Say "FAIL card: $($_.Exception.Message)" } })
+        $b1.Add_Click({ try { $f = Save-Card $script:prCard $script:proof.App; Say "Card salvat: $f"; Start-Process explorer.exe "/select,`"$f`"" } catch { Say "FAIL card: $($_.Exception.Message)" } })
         $b2 = New-PillBtn 'COPIAZA (Ctrl+V in Discord)'; $b2.Margin = '0,0,10,10'
         $b2.Add_Click({ try { [Windows.Clipboard]::SetImage($script:prCard); Say 'Cardul e copiat: lipeste-l cu Ctrl+V in Discord sau oriunde.' } catch { Say "FAIL copiere: $($_.Exception.Message)" } })
         $b3 = New-PillBtn 'IA-O DE LA CAPAT'; $b3.Margin = '0,0,10,10'; $b3.Background = Br '#1A070D'
-        $b3.Add_Click({ $script:pr = @{ Stage = 'none'; App = ''; Before = $null; After = $null; Boot = ''; Waiting = $false }; Save-Proof; Update-ProofPanel })
+        $b3.Add_Click({ $script:proof = @{ Stage = 'none'; App = ''; Before = $null; After = $null; Boot = ''; Waiting = $false }; Save-Proof; Update-ProofPanel })
         foreach ($x in $b1, $b2, $b3) { $row.Children.Add($x) | Out-Null }
         $proofPanel.Children.Add($row) | Out-Null
     } elseif ($st -ne 'none') {
         $rs2 = New-PillBtn 'IA-O DE LA CAPAT'; $rs2.Background = Br '#1A070D'
-        $rs2.Add_Click({ $script:pr = @{ Stage = 'none'; App = ''; Before = $null; After = $null; Boot = ''; Waiting = $false }; Save-Proof; Update-ProofPanel })
+        $rs2.Add_Click({ $script:proof = @{ Stage = 'none'; App = ''; Before = $null; After = $null; Boot = ''; Waiting = $false }; Save-Proof; Update-ProofPanel })
         $proofPanel.Children.Add($rs2) | Out-Null
     }
     $proofG.Badge.Text = $(switch ($st) { 'none' { 'arata cat ai castigat' } 'before' { 'pasul 2: optimizeaza' } 'optimized' { 'pasul 3: restart' } 'restarted' { 'pasul 4: testeaza din nou' }
-                                          'done' { "rezultat: $(Get-GainText $script:pr.Before.Avg $script:pr.After.Avg) FPS" } })
+                                          'done' { "rezultat: $(Get-GainText $script:proof.Before.Avg $script:proof.After.Avg) FPS" } })
 }
 # Rezultatul unui test FPS pornit din DOVADA
 function Proof-OnFps($app, $st) {
-    if (-not $script:pr.Waiting) { return }
-    $script:pr.Waiting = $false
+    if (-not $script:proof.Waiting) { return }
+    $script:proof.Waiting = $false
     $d = @{ Avg = [math]::Round($st.Avg, 1); Low1 = [math]::Round($st.Low1, 1); Low01 = [math]::Round($st.Low01, 1); Date = (Get-Date).ToString('yyyy-MM-dd HH:mm') }
-    if ($script:pr.Stage -in 'none', 'before') { $script:pr.Before = $d; $script:pr.App = $app; $script:pr.Stage = 'before'; $msg = "Test inainte salvat ($app). Acum optimizeaza." }
-    elseif ($script:pr.Stage -in 'optimized', 'restarted') {
-        if ($app -ne $script:pr.App) { $msg = "Testul a fost facut in $app, dar primul test a fost in $($script:pr.App). Repeta testul in acelasi joc."; Update-ProofPanel; $script:prStatus.Text = $msg; return }
-        $script:pr.After = $d; $script:pr.Stage = 'done'; $msg = "Gata! $(Get-GainText $script:pr.Before.Avg $d.Avg) FPS mediu dupa optimizare."
+    if ($script:proof.Stage -in 'none', 'before') { $script:proof.Before = $d; $script:proof.App = $app; $script:proof.Stage = 'before'; $msg = "Test inainte salvat ($app). Acum optimizeaza." }
+    elseif ($script:proof.Stage -in 'optimized', 'restarted') {
+        if ($app -ne $script:proof.App) { $msg = "Testul a fost facut in $app, dar primul test a fost in $($script:proof.App). Repeta testul in acelasi joc."; Update-ProofPanel; $script:prStatus.Text = $msg; return }
+        $script:proof.After = $d; $script:proof.Stage = 'done'; $msg = "Gata! $(Get-GainText $script:proof.Before.Avg $d.Avg) FPS mediu dupa optimizare."
     } else { return }
     Save-Proof; Update-ProofPanel; $script:prStatus.Text = $msg; Say "DOVADA 5AM: $msg"
     if (-not $SelfTest) { Show-Main; Open-Group $proofG }
@@ -2542,7 +2542,7 @@ $script:applyTimer.Add_Tick({
             'DONE' { $script:applyTimer.Stop(); Save-Backup; $Bar.Value = $Bar.Maximum
                      Say ''; Say 'GATA! Reporneste PC-ul ca toate modificarile sa se aplice.'; Say 'Dupa restart, deschide aplicatia si vezi comparatia inainte/dupa.'
                      $BtnApply.IsEnabled = $true; $BtnRevert.IsEnabled = $true; Update-Score
-                     if ($script:pr.Stage -eq 'before') { $script:pr.Stage = 'optimized'; $script:pr.Boot = Get-LastBoot; Save-Proof; Update-ProofPanel; Say 'DOVADA 5AM: pasul 2 gata. Reporneste PC-ul, apoi fa testul din nou (folderul DOVADA 5AM).' }
+                     if ($script:proof.Stage -eq 'before') { $script:proof.Stage = 'optimized'; $script:proof.Boot = Get-LastBoot; Save-Proof; Update-ProofPanel; Say 'DOVADA 5AM: pasul 2 gata. Reporneste PC-ul, apoi fa testul din nou (folderul DOVADA 5AM).' }
                      try { $script:wk.Dispose(); $script:wrs.Dispose() } catch {} }
             'OK'   { Say "OK   $txt"; $Bar.Value += 1 }
             'F'    { Say "FAIL $txt"; $Bar.Value += 1 }
@@ -2823,12 +2823,12 @@ if ($SelfTest) {
         $cd = New-ShareCard 'FiveM_GTAProcess.exe' @{ Avg = 128; Low1 = 90; Low01 = 60 } @{ Avg = 147.3; Low1 = 110; Low01 = 75 }
         if ($cd.PixelWidth -ne 1200) { $errs += 'card' }
         $cf = Save-Card $cd 'selftest'; if (-not (Test-Path $cf) -or (Get-Item $cf).Length -lt 20000) { $errs += 'card PNG' }; Remove-Item $cf -Force -ErrorAction SilentlyContinue
-        $prSave = $script:pr.Clone(); $prF = $proofFile; $proofFile = Join-Path $env:TEMP ('5am_st_proof_' + [guid]::NewGuid().ToString('N') + '.json')
-        $script:pr = @{ Stage = 'none'; App = ''; Before = $null; After = $null; Boot = ''; Waiting = $true }
-        Proof-OnFps 'joc.exe' @{ Avg = 100; Low1 = 70; Low01 = 50 }; $script:pr.Stage = 'restarted'; $script:pr.Waiting = $true
+        $prSave = $script:proof.Clone(); $prF = $proofFile; $proofFile = Join-Path $env:TEMP ('5am_st_proof_' + [guid]::NewGuid().ToString('N') + '.json')
+        $script:proof = @{ Stage = 'none'; App = ''; Before = $null; After = $null; Boot = ''; Waiting = $true }
+        Proof-OnFps 'joc.exe' @{ Avg = 100; Low1 = 70; Low01 = 50 }; $script:proof.Stage = 'restarted'; $script:proof.Waiting = $true
         Proof-OnFps 'joc.exe' @{ Avg = 115; Low1 = 85; Low01 = 60 }
-        if ($script:pr.Stage -ne 'done' -or (Get-GainText 100 115) -ne '+15%') { $errs += "dovada: $($script:pr.Stage)" }
-        Remove-Item $proofFile -Force -ErrorAction SilentlyContinue; $proofFile = $prF; $script:pr = $prSave
+        if ($script:proof.Stage -ne 'done' -or (Get-GainText 100 115) -ne '+15%') { $errs += "dovada: $($script:proof.Stage)" }
+        Remove-Item $proofFile -Force -ErrorAction SilentlyContinue; $proofFile = $prF; $script:proof = $prSave
         $benchSave = $benchFile; $benchFile = Join-Path $env:TEMP ('5am_st_bench_' + [guid]::NewGuid().ToString('N') + '.json')
         Add-BenchHistory @{ Type = 'fps'; Date = 'a'; App = 'x.exe'; Avg = 100.5; Low1 = 80 }
         Add-BenchHistory @{ Type = 'stress'; Date = 'b'; CpuMulti = 500; GpuFps = 200 }
