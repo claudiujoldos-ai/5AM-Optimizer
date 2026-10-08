@@ -7,20 +7,34 @@ Aplicatie cu interfata grafica (WPF) pentru Windows 11 care dezactiveaza functii
 - **AI si Copilot**: opreste Copilot, Recall, Click to Do, AI in Notepad / Paint / Edge / Office, sugestiile Bing din cautare
 - **Privacy**: fara ID de reclame, Timeline, locatie, feedback, tracking in Start, Spotlight pe lockscreen
 - **Power plan**: Ultimate Performance, PCIe / USB suspend oprite, hibernare oprita, Power Throttling oprit
-- **GPU si gaming**: Game Mode, Game DVR oprit, HAGS, mouse fara acceleratie, prioritate MMCSS pentru jocuri, optimizari pentru jocuri windowed
-- **Retea**: fara throttling multimedia, Nagle oprit (jocuri TCP)
+- **GPU si gaming**: Game Mode, Game DVR oprit, HAGS, mouse fara acceleratie
+- **FPS BOOST**: Game Bar fara popup-uri, optimizari jocuri windowed, fara upload P2P, Nagle oprit, CPU la maxim (optional MPO, timer global, fullscreen optimizations)
+- **Retea**: prioritate jocuri (MMCSS), cache DNS golit, DNS Cloudflare optional
+- **Curatenie disc**: cache shadere, Windows Update, browsere, Windows.old (optional)
+- **Servicii**: telemetrie oprita, servicii rar folosite pe Manual
 - **Curatare aplicatii**: sterge aplicatii preinstalate (Teams, Bing News, Solitaire, OneDrive etc.)
-- **Dashboard hardware live**: CPU, GPU (AMD / NVIDIA / Intel), RAM, discuri, plus o analiza simpla de bottleneck
-- **Recomandari AMD Adrenalin** afisate automat daca ai placa Radeon
 
-## Profiluri
+### Foldere speciale
 
-| Profil | Ce include |
-|--------|-----------|
-| **LOW** | Optimizari sigure, recomandat pentru majoritatea utilizatorilor |
-| **ULTRA** | Tot, inclusiv stergerea definitiva a unor aplicatii |
+- **Manager pornire**: alegi ce porneste odata cu Windows (ca in Task Manager)
+- **GPU pentru jocuri**: pui jocurile pe placa video dedicata (Performanta inalta)
+- **Mod joc**: cand pornesti un joc inchide aplicatiile alese si le redeschide dupa
+- **AMD Radeon Adrenalin**: setarile recomandate, apare doar daca ai placa AMD
+- **Comparatie inainte / dupa**: dupa restart vezi timpul de pornire, RAM, procese, programe la pornire
 
-Optiunile marcate **Optional** (MPO, timer global, fullscreen optimizations, Memory Integrity) nu sunt bifate de niciun profil, le activezi manual doar daca ai nevoie.
+### Dashboard hardware
+
+CPU, GPU (AMD / NVIDIA / Intel: VRAM, driver, load, temperatura), RAM, discuri, analiza de bottleneck si sfaturi rapide (XMP, Hz monitor, Resizable BAR, driver vechi, TRIM). Apasa pe un chip ca sa vezi detaliile.
+
+## Selectie
+
+Optimizarile sunt grupate in foldere. Apasa pe un folder ca sa vezi ce e inauntru.
+
+- **CU STELUTA**: doar cele recomandate (selectia implicita)
+- **TOT** / **NIMIC**: bifeaza sau debifeaza tot
+- In fiecare folder: **BIFEAZA TOT** / **DEBIFEAZA TOT**
+
+Optiunile marcate **Optional** si **SECURITATE** nu sunt bifate implicit, le activezi manual doar daca ai nevoie. Treci cu mouse-ul peste optimizarile din FPS BOOST ca sa vezi ce fac.
 
 ## Descarcare si rulare
 
