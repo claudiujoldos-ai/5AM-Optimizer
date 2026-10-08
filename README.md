@@ -1,4 +1,4 @@
-# 5AM Optimizer (WinGame Optimizer v2 - Gaming Edition)
+# 5AM Optimizer - Gaming Edition
 
 Aplicatie cu interfata grafica (WPF) pentru Windows 11 care dezactiveaza functiile AI / Copilot, reduce telemetria si aplica optimizari pentru gaming.
 
@@ -22,19 +22,35 @@ Aplicatie cu interfata grafica (WPF) pentru Windows 11 care dezactiveaza functii
 
 Optiunile marcate **Optional** (MPO, timer global, fullscreen optimizations, Memory Integrity) nu sunt bifate de niciun profil, le activezi manual doar daca ai nevoie.
 
-## Cum il rulezi
+## Descarcare si rulare
 
-1. Descarca `WinGameOptimizer.ps1`
-2. Click dreapta pe fisier > **Properties** > bifeaza **Unblock** (daca apare) > OK
-3. Click dreapta > **Run with PowerShell**
+**Varianta recomandata (.exe):**
 
-Sau dintr-un terminal PowerShell:
+1. Intra la [Releases](https://github.com/claudiujoldos-ai/5AM-Optimizer/releases/latest) si descarca `5AMOptimizer.exe`
+2. Ruleaza-l. Cere singur drepturi de Administrator
+3. Daca Windows SmartScreen il blocheaza: **More info** > **Run anyway** (aplicatia nu este semnata digital)
+
+Langa `.exe` gasesti si `5AMOptimizer.exe.sha256`, cu care poti verifica fisierul descarcat:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\WinGameOptimizer.ps1
+(Get-FileHash .\5AMOptimizer.exe -Algorithm SHA256).Hash
 ```
 
-Aplicatia cere singura drepturi de Administrator.
+**Varianta script (.ps1):**
+
+1. Descarca `5AMOptimizer.ps1`
+2. Click dreapta pe fisier > **Properties** > bifeaza **Unblock** (daca apare) > OK
+3. Click dreapta > **Run with PowerShell**, sau din PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\5AMOptimizer.ps1
+```
+
+## Actualizare automata
+
+La pornire, aplicatia verifica ultimul release de pe GitHub. Varianta `.exe` descarca singura versiunea noua, verifica suma SHA256 si se reporneste actualizata. Varianta `.ps1` doar te anunta ca exista o versiune noua.
+
+Pentru a opri actualizarea automata, creeaza fisierul gol `%APPDATA%\WinGameOptimizer\noautoupdate.txt`. Aplicatia va afisa atunci doar un buton **ACTUALIZEAZA**.
 
 ## Siguranta si revenire
 
@@ -58,3 +74,15 @@ Pentru citirea temperaturilor porneste [LibreHardwareMonitor](https://github.com
 
 - Windows 11 (functioneaza partial si pe Windows 10)
 - Windows PowerShell 5.1
+
+## Pentru dezvoltare: cum publici o versiune noua
+
+Release-urile se construiesc automat cu GitHub Actions (`.github/workflows/build.yml`):
+
+1. Scrie noutatile in `RELEASE_NOTES.md`
+2. Creeaza un tag nou, de exemplu `v1.0.1`, si da push
+3. Workflow-ul ruleaza auto-testul, compileaza `.exe`-ul cu ps2exe si publica release-ul cu `.exe` + `.sha256`
+
+## Licenta
+
+[MIT](LICENSE)
