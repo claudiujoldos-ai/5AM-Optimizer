@@ -3,7 +3,7 @@
 param([switch]$SelfTest)
 
 # Versiunea se suprascrie automat din tag-ul GitHub la build (v1.2.3 -> 1.2.3). Nu o muta de pe linia asta.
-$AppVersion = '1.1.1'
+$AppVersion = '1.1.2'
 # Repo-ul GitHub de unde se descarca actualizarile (owner/repo)
 $UpdateRepo = 'claudiujoldos-ai/5AM-Optimizer'
 
@@ -224,7 +224,7 @@ $tweaks = @(
     if (Test-Path $o) { takeown /F $o /R /A /D Y | Out-Null; icacls $o /grant '*S-1-5-32-544:F' /T /C /Q | Out-Null
                         Remove-Item $o -Recurse -Force -ErrorAction SilentlyContinue } }},
 
- @{G='SERVICII'; P=2; L='Telemetrie: serviciile DiagTrack si dmwappushservice oprite'; Do={
+ @{G='SERVICII'; P=9; NoStar=$true; L='Telemetrie: serviciile DiagTrack si dmwappushservice oprite'; Do={
     foreach ($s in 'DiagTrack', 'dmwappushservice') { if (Test-Path "HKLM:\SYSTEM\CurrentControlSet\Services\$s") { RegSet "HKLM:\SYSTEM\CurrentControlSet\Services\$s" 'Start' 4 } } }},
  @{G='SERVICII'; P=2; L='Servicii rar folosite pe Manual (Harti, Fax, Retail Demo, Control parental)'; Do={
     foreach ($s in 'MapsBroker', 'Fax', 'RetailDemo', 'WpcMonSvc') { if (Test-Path "HKLM:\SYSTEM\CurrentControlSet\Services\$s") { RegSet "HKLM:\SYSTEM\CurrentControlSet\Services\$s" 'Start' 3 } } }},
