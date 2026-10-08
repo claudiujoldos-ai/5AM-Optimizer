@@ -95,11 +95,13 @@ Pentru temperaturi, frecvente, consum si ventilator pe AMD / Intel porneste [Lib
 
 ## Pentru dezvoltare: cum publici o versiune noua
 
-Release-urile se construiesc automat cu GitHub Actions (`.github/workflows/build.yml`):
+Release-urile se publica automat cu GitHub Actions (`.github/workflows/build.yml`). Nu trebuie creat nimic manual:
 
-1. Scrie noutatile in `RELEASE_NOTES.md`
-2. Creeaza un tag nou, de exemplu `v1.0.1`, si da push
-3. Workflow-ul ruleaza auto-testul, compileaza `.exe`-ul cu ps2exe si publica release-ul cu `.exe` + `.sha256`
+1. Modifica `5AMOptimizer.ps1` si scrie noutatile in `RELEASE_NOTES.md`
+2. Mareste versiunea pe linia `$AppVersion = '1.1.0'` (de exemplu `1.1.1`)
+3. Da push pe `main`
+
+Workflow-ul ruleaza auto-testul, compileaza `.exe`-ul cu ps2exe si publica release-ul `v1.1.1` cu `.exe` + `.sha256`. Aplicatiile deja instalate se actualizeaza singure la urmatoarea pornire. Daca versiunea nu s-a schimbat, se face doar build si test, fara release.
 
 ## Licenta
 
