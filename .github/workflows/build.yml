@@ -73,8 +73,13 @@ jobs:
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -STA -File .\5AMOptimizer.ps1 -SelfTest
           $code = $LASTEXITCODE
-          Get-Content "$env:TEMP\5am_selftest.txt"
-          if ($code -ne 0) { throw "SelfTest a esuat (cod $code)" }
+          $out = @(Get-Content "$env:TEMP\5am_selftest.txt" -ErrorAction SilentlyContinue)
+          $out
+          if ($code -ne 0) {
+            foreach ($l in $out) { Write-Output "::error title=SelfTest::$l" }
+            if (-not $out.Count) { Write-Output "::error title=SelfTest::fara fisier de rezultat (cod $code)" }
+            throw "SelfTest a esuat (cod $code)"
+          }
 
       - name: Instaleaza ps2exe
         shell: powershell
