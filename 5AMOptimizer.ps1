@@ -3,7 +3,7 @@
 param([switch]$SelfTest)
 
 # Versiunea se suprascrie automat din tag-ul GitHub la build (v1.2.3 -> 1.2.3). Nu o muta de pe linia asta.
-$AppVersion = '1.3.1'
+$AppVersion = '1.3.2'
 # Repo-ul GitHub de unde se descarca actualizarile (owner/repo)
 $UpdateRepo = 'claudiujoldos-ai/5AM-Optimizer'
 
@@ -34,7 +34,20 @@ $script:splashT0 = Get-Date
 # ---------- Backup registry (Undo) ----------
 $bkDir = "$env:APPDATA\WinGameOptimizer"; $bkFile = "$bkDir\backup.json"
 $script:bk = @{}
-if (Test-Path $bkFile) { foreach ($e in @(Get-Content $bkFile -Raw | ConvertFrom-Json)) { $script:bk["$($e.Path)|$($e.Name)"] = $e } }
+# Citeste o lista dintr-un fisier JSON. Windows PowerShell 5.1 intoarce o lista JSON ca un singur obiect,
+# iar @(...) o impacheta inca o data; aici lista e desfacuta corect (si reparata daca fisierul are liste imbricate).
+function Read-JsonList($path) {
+    if (-not (Test-Path -LiteralPath $path)) { return }
+    $raw = $null; try { $raw = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop } catch { return }
+    $todo = New-Object Collections.Stack; $todo.Push($raw); $out = New-Object Collections.ArrayList
+    while ($todo.Count) {
+        $v = $todo.Pop()
+        if ($null -eq $v) { continue }
+        if ($v -is [Array]) { for ($i = $v.Count - 1; $i -ge 0; $i--) { $todo.Push($v[$i]) } } else { [void]$out.Add($v) }
+    }
+    $out.ToArray()
+}
+foreach ($e in @(Read-JsonList $bkFile)) { if ($e.Path -is [string]) { $script:bk["$($e.Path)|$($e.Name)"] = $e } }
 function Save-Backup {
     if (-not (Test-Path $bkDir)) { New-Item $bkDir -ItemType Directory -Force | Out-Null }
     @($script:bk.Values) | ConvertTo-Json -Depth 4 | Set-Content $bkFile -Encoding UTF8
@@ -195,7 +208,7 @@ $tweaks = @(
  @{G='RETEA'; P=2; L='Cache DNS golit'; Do={ ipconfig /flushdns | Out-Null }},
  @{G='RETEA'; P=9; NoStar=$true; I='1F50B'; L='Placa de retea fara economie de energie (fara varfuri de ping)'; T='Opreste Energy Efficient Ethernet, Green Ethernet si oprirea placii de catre Windows pentru economie. Ajuta mai ales pe laptopuri. Conexiunea se reia cateva secunde la aplicare. REVINO pune totul la loc.'; Do={
     $nf = "$env:APPDATA\WinGameOptimizer\netadapter.json"
-    $log = @(); if (Test-Path $nf) { $log = @(Get-Content $nf -Raw | ConvertFrom-Json) }
+    $log = @(Read-JsonList $nf)
     $kw = '^(\*EEE|AdvancedEEE|EEELinkAdvertisement|EnableGreenEthernet|GigaLite|PowerSavingMode|ULPMode|EnablePowerManagement)$'
     $ch = 0
     foreach ($na in @(Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' })) {
@@ -330,7 +343,7 @@ $tweaks = @(
     if ($add.Count) { Add-MpPreference -ExclusionPath $add -ErrorAction Stop }
     # tinem minte ce am adaugat noi, ca REVINO sa scoata doar acestea
     $df = "$env:APPDATA\WinGameOptimizer\defender.json"
-    $prev = @(); if (Test-Path $df) { $prev = @(Get-Content $df -Raw | ConvertFrom-Json) }
+    $prev = @(Read-JsonList $df)
     New-Item (Split-Path $df) -ItemType Directory -Force | Out-Null
     ConvertTo-Json -InputObject @(@($prev + $add) | Select-Object -Unique) | Set-Content $df -Encoding UTF8
     if (-not $add.Count) { throw "erau deja excluse: $($found -join ', ')" } }}
@@ -1592,7 +1605,7 @@ function Get-Bottleneck($samples, $fps, $refresh) {
     @{ Rows = $rows; Verdict = $v; Kind = $k; Notes = $notes; Ct = $ct; Gt = $gt }
 }
 
-function Get-BenchHistory { if (Test-Path $benchFile) { try { return @(Get-Content $benchFile -Raw | ConvertFrom-Json) } catch {} }; @() }
+function Get-BenchHistory { @(Read-JsonList $benchFile) }
 function Add-BenchHistory($e) {
     $h = @(Get-BenchHistory) + @([pscustomobject]$e)
     if ($h.Count -gt 30) { $h = $h[($h.Count - 30)..($h.Count - 1)] }
@@ -1660,9 +1673,11 @@ $bmBar.Background = Br '#1F0A10'; $bmBar.Foreground = Br '#FF9F1C'; $bmBar.Margi
 $benchPanel.Children.Add($bmBar) | Out-Null
 $stressOut = Add-BenchText '' 12.5 '#FFE4EA' $true '0,0,0,4'
 $lastF = @(Get-BenchHistory | Where-Object { $_.Type -eq 'fps' }) | Select-Object -Last 1
+try {
 if ($lastF) { $fpsOut.Text = "Ultimul test ($($lastF.Date)): $($lastF.App)  -  $([int]$lastF.Avg) FPS mediu, 1% low $([int]$lastF.Low1)"; $benchG.Badge.Text = "ultimul: $([int]$lastF.Avg) FPS" }
 $lastS = @(Get-BenchHistory | Where-Object { $_.Type -eq 'stress' }) | Select-Object -Last 1
 if ($lastS) { $stressOut.Text = "Ultimul test de stres ($($lastS.Date)): CPU $([int]$lastS.CpuMulti) puncte, GPU $([int]$lastS.GpuFps) FPS" }
+} catch {}
 
 function Set-BenchBusy($on) { $script:bm.Busy = $on; $btnFps.IsEnabled = -not $on; $btnStress.IsEnabled = -not $on; $BtnApply.IsEnabled = -not $on }
 
@@ -2008,7 +2023,7 @@ $BtnApply.Add_Click({
     Save-Meta
     if (-not (Test-Path $snapFile)) { try { Get-SnapNow | ConvertTo-Json | Set-Content $snapFile } catch {} }
     $items = @($sel | ForEach-Object { @{ L = $_.Tag.L; Do = $_.Tag.Do.ToString(); K = $_.Tag.K; E = $_.Tag.E; X = $_.Tag.X } })
-    $defs = 'function RegSet {' + ${function:RegSet} + "}`nfunction Remove-AppPkg {" + ${function:Remove-AppPkg} + '}'
+    $defs = 'function RegSet {' + ${function:RegSet} + "}`nfunction Remove-AppPkg {" + ${function:Remove-AppPkg} + "}`nfunction Read-JsonList {" + ${function:Read-JsonList} + '}'
     $script:wrs = [runspacefactory]::CreateRunspace(); $script:wrs.Open()
     $script:wrs.SessionStateProxy.SetVariable('bk', $script:bk)
     $script:wk = [powershell]::Create(); $script:wk.Runspace = $script:wrs
@@ -2049,16 +2064,16 @@ $BtnRevert.Add_Click({
     }
     $nf = "$bkDir\netadapter.json"
     if (Test-Path $nf) {
-        try { foreach ($e in @(Get-Content $nf -Raw | ConvertFrom-Json)) {
+        try { foreach ($e in @(Read-JsonList $nf)) {
                   if ($e.K -eq '#PM') { Set-NetAdapterPowerManagement -Name $e.N -AllowComputerToTurnOffDevice Enabled -NoRestart -ErrorAction SilentlyContinue }
                   else { Set-NetAdapterAdvancedProperty -Name $e.N -RegistryKeyword $e.K -RegistryValue $e.V -NoRestart -ErrorAction SilentlyContinue }
                   Say "UNDO placa de retea $($e.N): $($e.K)" }
-              foreach ($n in @(Get-Content $nf -Raw | ConvertFrom-Json | ForEach-Object { $_.N } | Select-Object -Unique)) { Restart-NetAdapter -Name $n -ErrorAction SilentlyContinue }
+              foreach ($n in @(Read-JsonList $nf | ForEach-Object { $_.N } | Select-Object -Unique)) { Restart-NetAdapter -Name $n -ErrorAction SilentlyContinue }
               Remove-Item $nf -Force } catch { Say "FAIL undo placa de retea: $($_.Exception.Message)" }
     }
     $df = "$bkDir\defender.json"
     if (Test-Path $df) {
-        try { $ex = @(Get-Content $df -Raw | ConvertFrom-Json)
+        try { $ex = @(Read-JsonList $df)
               if ($ex.Count) { Remove-MpPreference -ExclusionPath $ex -ErrorAction Stop; Say "UNDO excluderi Defender ($($ex.Count) foldere)" }
               Remove-Item $df -Force } catch { Say "FAIL undo excluderi Defender: $($_.Exception.Message)" }
     }
@@ -2259,6 +2274,17 @@ if ($SelfTest) {
         $smp = @(@{ Cpu = 40; Core = 97; Gpu = 60; VU = 7000; VT = 8192; Ram = 50 }, @{ Cpu = 45; Core = 95; Gpu = 62; VU = 7100; VT = 8192; Ram = 52 })
         $bn = Get-Bottleneck $smp 120 240; if ($bn.Kind -ne 'CPU') { $errs += "bottleneck: $($bn.Kind)" }
         Show-Bottleneck $bn 'test'
+        $benchSave = $benchFile; $benchFile = Join-Path $env:TEMP ('5am_st_bench_' + [guid]::NewGuid().ToString('N') + '.json')
+        Add-BenchHistory @{ Type = 'fps'; Date = 'a'; App = 'x.exe'; Avg = 100.5; Low1 = 80 }
+        Add-BenchHistory @{ Type = 'stress'; Date = 'b'; CpuMulti = 500; GpuFps = 200 }
+        Add-BenchHistory @{ Type = 'fps'; Date = 'c'; App = 'x.exe'; Avg = 120.5; Low1 = 90 }
+        $hh = @(Get-BenchHistory); $lf = @($hh | Where-Object { $_.Type -eq 'fps' }) | Select-Object -Last 1
+        if ($hh.Count -ne 3 -or [int]$lf.Avg -ne 120) { $errs += "istoric benchmark: $($hh.Count) intrari, ultimul $($lf.Avg)" }
+        Remove-Item $benchFile -Force -ErrorAction SilentlyContinue; $benchFile = $benchSave
+        $tf = Join-Path $env:TEMP ('5am_st_bk_' + [guid]::NewGuid().ToString('N') + '.json')
+        '[[{"Path":"HKCU:\\A","Name":"x"},{"Path":"HKCU:\\B","Name":"y"}],{"Path":"HKCU:\\C","Name":"z"}]' | Set-Content $tf
+        if (@(Read-JsonList $tf).Count -ne 3) { $errs += 'Read-JsonList nu desface listele imbricate' }
+        Remove-Item $tf -Force -ErrorAction SilentlyContinue
         $tr = [FiveAmSys]::Timer($true); [void][FiveAmSys]::Timer($false); if (-not ($tr -gt 0 -and $tr -le 16)) { $errs += "timer: $tr" }
         [void][FiveAmSys]::PurgeStandby()
     } catch { $errs += "benchmark: $($_.Exception.Message)" }

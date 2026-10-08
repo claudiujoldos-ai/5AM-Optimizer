@@ -1,4 +1,5 @@
-5AM Optimizer v1.3.1
-- Folder AMD RADEON ADRENALIN refacut (apare doar pe placi AMD dedicate), la fel de complet ca cel NVIDIA
-- Corectat: Anti-Lag din driver si HYPR-RX nu mai sunt recomandate in jocurile online cu anti-cheat (risc de ban); se recomanda Anti-Lag 2 din joc
-- AMD: FreeSync cu limita de FPS calculata pentru monitorul tau, Chill, Boost, FSR vs RSR, AFMF, Image Sharpening, undervolt
+5AM Optimizer v1.3.2
+- Corectat: eroarea "Cannot convert System.Object[] to System.Int32" la pornire, dupa ce rulai mai multe teste in BENCHMARK
+- Corectat: REVINO LA SETARILE ORIGINALE nu functiona corect dupa un restart al PC-ului (citirea copiei de siguranta)
+- Corectat: aceeasi problema la excluderile Defender si setarile placii de retea salvate
+- Istoricul testelor tale se pastreaza
