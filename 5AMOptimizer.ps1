@@ -3,7 +3,7 @@
 param([switch]$SelfTest)
 
 # Versiunea se suprascrie automat din tag-ul GitHub la build (v1.2.3 -> 1.2.3). Nu o muta de pe linia asta.
-$AppVersion = '1.1.0'
+$AppVersion = '1.1.1'
 # Repo-ul GitHub de unde se descarca actualizarile (owner/repo)
 $UpdateRepo = 'claudiujoldos-ai/5AM-Optimizer'
 
@@ -628,9 +628,13 @@ function Get-GpuInfo {
         ([string]$v).Trim([char]0, ' ')
     }
     $cls = 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11cd-be10-08002be10318}'
+    # Fiecare subcheie 0000, 0001... e citita separat: subcheia "Properties" e protejata de Windows
+    # si, daca lista se citeste dintr-o data, eroarea ei oprea toata citirea (VRAM ramanea la 4 GB).
     $regs = @()
-    try { $regs = @(Get-ChildItem -LiteralPath $cls -ErrorAction Stop | Where-Object { $_.PSChildName -match '^\d{4}$' } |
-                    ForEach-Object { Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue }) } catch {}
+    for ($i = 0; $i -lt 32; $i++) {
+        $kp = Join-Path $cls ('{0:D4}' -f $i)
+        try { $it = Get-ItemProperty -LiteralPath $kp -ErrorAction Stop; if ($it.DriverDesc) { $regs += $it } } catch {}
+    }
     $out = @()
     foreach ($a in $script:gpuAdapters) {
         $r = $regs | Where-Object { $_.DriverDesc -eq $a.Name } | Select-Object -First 1
@@ -644,6 +648,16 @@ function Get-GpuInfo {
             $adr = Rs $r.RadeonSoftwareVersion
             if ($adr -notmatch '^[0-9\.]{3,20}$') { $adr = '' }
         }
+        # rezerva pentru NVIDIA: memoria raportata direct de driver
+        if ($vram -le 4GB -and $a.Name -match 'NVIDIA' -and (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) {
+            try {
+                foreach ($ln in @(& nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>$null)) {
+                    $nm, $mb = ([string]$ln) -split ',\s*'
+                    if ($nm -and $a.Name -like "*$($nm.Trim())*" -and [int]$mb -gt 0) { $vram = [double]$mb * 1MB; break }
+                }
+            } catch {}
+        }
+        # ultima varianta: AdapterRAM (limitat de Windows la 4 GB)
         if ($vram -le 0 -and $a.AdapterRAM) { $vram = [double]$a.AdapterRAM }
         $vtxt = if ($vram -le 0) { 'VRAM ?' } elseif ($vram -lt 2GB) { '{0:N0} MB' -f ($vram / 1MB) } else { '{0:N0} GB' -f ($vram / 1GB) }
         if ($mt) { $vtxt += " $mt" }
